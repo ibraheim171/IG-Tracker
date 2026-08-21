@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #F4F1EA;
+  --card: #FBF9F4;
+  --ink: #231E1C;
+  --accent: #96181D;
+  --accent-soft: #E2C3C4;
+  --rule: #DDD5C7;
+  --track-basira: #1E8F8B;
+  --track-masra: #96181D;
+  --track-bawsala: #6F8B4E;
+  --track-marraw: #A87433;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body), sans-serif;
+}
+
+button, input, select { font: inherit; }
+
+button, input, select { min-block-size: 44px; }
+
+button { cursor: pointer; }
+
+.num {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.page { inline-size: min(100%, 48rem); margin-inline: auto; padding: 1.25rem; }
+.auth-page { display: grid; min-block-size: 100dvh; align-items: center; }
+.card { background: var(--card); border: 1px solid var(--rule); border-radius: 0.75rem; padding: 1.25rem; }
+.stack { display: grid; gap: 1rem; }
+.field { display: grid; gap: 0.5rem; font-weight: 700; }
+.input { inline-size: 100%; border: 1px solid var(--rule); border-radius: 0.5rem; background: var(--card); color: var(--ink); padding-inline: 0.75rem; }
+.button { border: 0; border-radius: 0.5rem; background: var(--accent); color: var(--card); font-family: var(--font-heading), sans-serif; font-weight: 700; padding-inline: 1rem; }
+.button-secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.muted { color: color-mix(in srgb, var(--ink) 65%, var(--card)); }
+.error { color: var(--accent); font-weight: 700; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-block-end: 1px solid var(--rule); padding: 0.75rem 1.25rem; background: var(--card); }
+.table-wrap { overflow-inline: auto; }
+table { inline-size: 100%; border-collapse: collapse; }
+th, td { border-block-end: 1px solid var(--rule); padding: 0.75rem; text-align: start; vertical-align: middle; }
+fieldset { border: 1px solid var(--rule); border-radius: 0.5rem; padding: 0.75rem; }
+.checks { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+h1, h2 { font-family: var(--font-heading), sans-serif; }
