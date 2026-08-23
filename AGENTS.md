@@ -205,7 +205,66 @@ not prove the instruction was right.
 
 ---
 
-## 9. Working agreement
+## 9. Deferred — do not build without an explicit go-ahead
+
+These are agreed future work, written down so they are not forgotten and not
+started early by mistake. Do not scaffold tables, routes, or UI for anything in
+this section unless the person explicitly asks to begin it.
+
+### Notifications & reminders
+
+An admin-configurable reminder system: the admin can message any team member
+directly, and the system can send automatic reminders — e.g. a nudge to
+whoever is marked as publisher an hour before a publishing slot, or a nudge to
+a writer whose item has sat in one stage too long. Schedule and triggers must
+be configurable by the admin (daily digest vs. per-event, quiet hours, etc.),
+not hard-coded.
+
+When this is picked up, resolve first:
+- **Delivery channel.** Email is simplest (Code.gs already sends the daily
+  brief via `MailApp`); WhatsApp would need a paid API and is a separate
+  decision, not a default.
+- **Trigger model.** A scheduled job (cron) checking `publishing_slots` and
+  `items.status` against thresholds, distinct from a per-user notification
+  preferences table.
+- **Where rules live.** Consistent with §2.1, the *conditions* for the six
+  gate rules live in `item_violations()` — reminder *rules* are a different
+  concern (timing, not permission) and should get their own config table, not
+  be folded into the gate-rule function.
+
+### Editorial-decision skills
+
+Judgment aids for content/publishing decisions (drawn from an external
+reference the person is adapting). Explicitly on hold until the operational
+core (this document, sections 1–8) is running and stable. Do not start
+drafting these skills as a side effect of an unrelated task.
+
+### Flexible scheduling beyond the fixed slots
+
+An admin affordance to open an exceptional publishing slot outside the
+Mon/Tue/Sat 21:00 cadence (e.g. a one-off Thursday post), reusing the existing
+`assign_slot()` RPC — no new schema needed for this part. The fixed cadence
+stays the *default*; this is an admin-only exception path, not a free date
+picker for regular users (that would break §2's "date comes from slots only"
+rule).
+
+**Do not build "pull best posting time from Instagram."** The account uses
+the Instagram Login API path (`graph.instagram.com`), not Facebook Login +
+Business assets; there is no evidence the "when your followers are most
+active" feature is exposed through that API, and it is not in this codebase's
+metric lists (`M_ACCT`, `M_POST`, `M_REEL` in `Code.gs`). Do not scaffold
+against this assumption without first confirming the endpoint exists for this
+account's auth path.
+
+Once slots are flexible and posting times start to vary, a better and fully
+owned alternative becomes possible: mine the account's own `v_item_performance`
+for median `signal` grouped by day-of-week / hour-of-day. Today every post
+goes out at 21:00, so there is no time variance yet to learn from — this only
+becomes useful after the flexibility above ships.
+
+---
+
+## 10. Working agreement
 
 - Small commits, one concern each. Arabic commit subject is fine; body in English.
 - No new dependency without a stated reason. No UI kit, no charting library until a
