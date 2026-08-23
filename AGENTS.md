@@ -131,6 +131,18 @@ as prominently as the filled ones; a gap discovered afterwards is worthless.
 
 Publication dates come from slots only. There is no free date picker anywhere.
 
+**Forward-generated slots vs. historical slots — do not conflate them.**
+`ensure_slots()` must only ever produce Mon/Tue/Sat 21:00 slots — that rule is
+absolute for anything it generates going forward. But `publishing_slots` also
+holds rows created once, at migration time, to record items' *actual*
+historical publish dates from the old sheet — and real publishing sometimes
+drifted off the ideal cadence (the old Portal.gs tracked this on purpose, as
+"planned vs. actual" gaps). Those historical rows may legitimately fall on
+any weekday. Finding an off-cadence row linked to a real item is not
+automatically a bug — check whether it is a forward slot (should be fixed)
+or a migrated historical one (leave it; note field / `is_archived` context on
+its items will usually tell you which).
+
 ---
 
 ## 5. Visual identity
