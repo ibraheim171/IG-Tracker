@@ -60,7 +60,7 @@ export type WaitingItem = {
 
 export type MyMaterial = {
   item_id: string;
-  part: ParticipantPart;
+  parts: ParticipantPart[];
   item: {
     id: string;
     ref: string;
