@@ -1,16 +1,13 @@
 "use client";
 
-import { useState, useTransition, type CSSProperties } from "react";
+import { useMemo, useState, useTransition, type CSSProperties } from "react";
 import { ItemDrawer } from "@/components/item-drawer";
 import { createClient } from "@/lib/supabase/client";
-import type { IdeaTypeOption, PartnerOption, ReadyItem, RoleName, TrackOption } from "@/lib/ui-data";
+import type { DrawerPreview, ReadyItem, RoleName } from "@/lib/ui-data";
 import { extractMessage, formatHebronDateTime, isAdminRole, parseRuleMessage } from "@/lib/ui-data";
 
 type Props = {
   initialItems: ReadyItem[];
-  tracks: TrackOption[];
-  ideaTypes: IdeaTypeOption[];
-  partners: PartnerOption[];
   currentUserId: string;
   roles: RoleName[];
 };
@@ -19,7 +16,24 @@ function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function ReadyList({ initialItems, tracks, ideaTypes, partners, currentUserId, roles }: Props) {
+function previewFromReady(item: ReadyItem): DrawerPreview {
+  return {
+    id: item.id,
+    ref: item.ref,
+    title: item.title,
+    status: "ready",
+    track_id: item.track_id,
+    track_name: item.track_name,
+    track_color: item.color_hex,
+    idea_type: item.idea_type,
+    slot_at: item.slot_at,
+    caption: item.caption,
+    production_file_url: item.production_file_url,
+    partners: item.partners,
+  };
+}
+
+export function ReadyList({ initialItems, currentUserId, roles }: Props) {
   const supabase = createClient();
   const [items, setItems] = useState(initialItems);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -31,6 +45,10 @@ export function ReadyList({ initialItems, tracks, ideaTypes, partners, currentUs
   const [isPending, startTransition] = useTransition();
   const isAdmin = isAdminRole(roles);
   const linkLooksValid = /^https:\/\/www\.instagram\.com\/(p|reel|tv)\/[^/?#]+/.test(permalink.trim());
+  const openItem = useMemo(() => {
+    const item = items.find((candidate) => candidate.id === openItemId);
+    return item ? previewFromReady(item) : null;
+  }, [items, openItemId]);
 
   async function publish(override: string | null = null) {
     if (!publishItem || !linkLooksValid) return;
@@ -100,7 +118,7 @@ export function ReadyList({ initialItems, tracks, ideaTypes, partners, currentUs
         </div>
       ) : null}
 
-      <ItemDrawer itemId={openItemId} onClose={() => setOpenItemId(null)} tracks={tracks} ideaTypes={ideaTypes} partners={partners} currentUserId={currentUserId} roles={roles} />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} currentUserId={currentUserId} roles={roles} />
     </main>
   );
 }
