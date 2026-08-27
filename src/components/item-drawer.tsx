@@ -277,7 +277,7 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
       setMessage(parseRuleMessage(extractMessage(error)));
       return;
     }
-    setMessage("تم ربط فتحة النشر.");
+    setMessage("تم ربط موعد النشر.");
     await reloadAndNotify();
   }
 
@@ -388,7 +388,7 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
                 {item.status === "design_approved" && (isParticipant || isAdmin) ? <button className="button" type="button" disabled={isPending} onClick={() => runAction(() => advance("ready"))}>انتقل إلى جاهز للنشر</button> : null}
                 {item.status === "ready" ? <p className="muted">تظهر هذه المادة في شاشة جاهز للنشر.</p> : null}
                 {!item.slot_id && item.status !== "published" ? (
-                  <label className="field">فتحة النشر<select className="input" defaultValue="" onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر فتحة</option>{drawerDetails.openSlots.map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
+                  <label className="field">موعد النشر<select className="input" defaultValue="" onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails.openSlots.map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
                 ) : null}
                 {isAdmin && failedAdvance ? (
                   <div className="override-box">
