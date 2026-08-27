@@ -274,6 +274,36 @@ for median `signal` grouped by day-of-week / hour-of-day. Today every post
 goes out at 21:00, so there is no time variance yet to learn from — this only
 becomes useful after the flexibility above ships.
 
+### Weekly recognition digest (admin-only, never automatic)
+
+A private, admin-only weekly view ranking that week's published items by
+rate metrics (save %/share %), flagged `عيّنة صغيرة` exactly like the existing
+performance views — never a raw-count leaderboard, never shown to the team
+automatically. The admin looks at it, decides personally whether and whom to
+congratulate, and only then sends a message by hand (or via the deferred
+notifications feature above once it exists). This is intentionally the same
+shape as the monthly report: the system supplies clean, rate-based numbers
+with sample-size caveats; a human makes the call. Never auto-post a "top
+performer" badge or send a congratulatory message without the admin
+triggering it for that specific person that week.
+
+### Weekly top-engagement panel (admin-only, human-sent)
+
+An admin-facing weekly view ranking the week's published items by a *rate*
+(save % or share %, never raw reach — reach accumulates with age, see §6's
+analytical principles), flagged `عيّنة صغيرة` exactly like everywhere else
+when a person's only item that week makes them look artificially "first."
+The admin looks at it and decides — the system never auto-selects a "best"
+item or auto-sends anything. A "send encouragement" button next to a chosen
+person opens a message (admin-edited or a suggested draft) that goes out only
+after the admin presses send.
+
+**Do not build this as an automatic leaderboard or automatic congratulatory
+message.** That would be the same mistake as the collab-suggestion guard in
+§7 in a different costume: a small sample dressed up as a ranking. The
+judgment stays with the admin; the system only makes the numbers easy to
+scan.
+
 ---
 
 ## 10. Working agreement
