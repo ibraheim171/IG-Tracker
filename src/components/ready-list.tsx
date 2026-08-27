@@ -25,7 +25,6 @@ export function ReadyList({ initialItems, tracks, ideaTypes, partners, currentUs
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [publishItem, setPublishItem] = useState<ReadyItem | null>(null);
   const [permalink, setPermalink] = useState("");
-  const [publishedAt, setPublishedAt] = useState(() => new Date().toISOString().slice(0, 16));
   const [message, setMessage] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [blocked, setBlocked] = useState(false);
@@ -35,11 +34,9 @@ export function ReadyList({ initialItems, tracks, ideaTypes, partners, currentUs
 
   async function publish(override: string | null = null) {
     if (!publishItem || !linkLooksValid) return;
-    const at = new Date(publishedAt).toISOString();
     const { error } = await supabase.rpc("mark_published", {
       p_item: publishItem.id,
       p_permalink: permalink.trim(),
-      p_at: at,
       p_override_reason: override ?? undefined,
     });
     if (error) {
@@ -79,20 +76,19 @@ export function ReadyList({ initialItems, tracks, ideaTypes, partners, currentUs
                 <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(item.caption ?? "")}>نسخ الكابشن</button>
                 {item.production_file_url ? <a className="button button-secondary" href={item.production_file_url} target="_blank" rel="noreferrer">فتح ملف الإنتاج</a> : null}
                 <button className="button button-secondary" type="button" onClick={() => setOpenItemId(item.id)}>فتح البطاقة</button>
-                <button className="button" type="button" onClick={() => { setPublishItem(item); setPublishedAt(new Date().toISOString().slice(0, 16)); }}>تم النشر</button>
+                {isAdmin ? <button className="button" type="button" onClick={() => setPublishItem(item)}>تم النشر</button> : null}
               </div>
             </article>
           ))}
         </div>
       ) : <section className="card"><p>لا توجد مواد جاهزة للنشر.</p></section>}
 
-      {publishItem ? (
+      {isAdmin && publishItem ? (
         <div className="veil" onClick={() => setPublishItem(null)}>
           <form className="confirm-panel stack" onSubmit={(event) => { event.preventDefault(); startTransition(() => { void publish(); }); }} onClick={(event) => event.stopPropagation()}>
             <h2>تأكيد النشر</h2>
             {message ? <p className="notice">{message}</p> : null}
             <label className="field">رابط إنستغرام<input className="input" value={permalink} onChange={(event) => setPermalink(event.target.value)} placeholder="https://www.instagram.com/p/..." /></label>
-            <label className="field">وقت النشر<input className="input" type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} /></label>
             <button className="button" type="submit" disabled={!linkLooksValid || isPending}>حفظ النشر</button>
             {blocked && isAdmin ? (
               <div className="override-box">
