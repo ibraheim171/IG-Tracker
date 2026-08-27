@@ -101,8 +101,7 @@ function findTrack(tracks: TrackOption[], item: ItemRow | DrawerPreview | null) 
 }
 
 function findIdeaType(ideaTypes: IdeaTypeOption[], item: ItemRow | DrawerPreview | null) {
-  const ideaTypeId = "idea_type_id" in (item ?? {}) ? item?.idea_type_id : null;
-  return ideaTypes.find((ideaType) => ideaType.id === ideaTypeId) ?? null;
+  return ideaTypes.find((ideaType) => ideaType.id === item?.idea_type_id) ?? null;
 }
 
 function hasAbortName(error: unknown) {
@@ -160,7 +159,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setRejectNote("");
 
       const startedAt = performance.now();
-      const [itemResult, participantsResult, partnersResult, approvalsResult] = await Promise.all([
+      const baseResults = await Promise.all([
         supabase.from("items").select("*").eq("id", itemId).single().abortSignal(controller.signal),
         supabase.from("item_participants").select("user_id, part, profiles(display_name)").eq("item_id", itemId).abortSignal(controller.signal),
         supabase.from("item_partners").select("partner_id, partners(name)").eq("item_id", itemId).abortSignal(controller.signal),
@@ -169,7 +168,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         if (controller.signal.aborted || hasAbortName(error)) return null;
         throw error;
       });
-      if (!itemResult || controller.signal.aborted || sequence !== loadSequence.current) return;
+      if (!baseResults || controller.signal.aborted || sequence !== loadSequence.current) return;
+      const [itemResult, participantsResult, partnersResult, approvalsResult] = baseResults;
       console.debug("ItemDrawer basic queries", { itemId, ms: Math.round(performance.now() - startedAt) });
       if (itemResult.error) {
         setMessage(extractMessage(itemResult.error));
@@ -204,11 +204,12 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       const slotsPromise = shouldLoadOpenSlots
         ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24).abortSignal(controller.signal)
         : Promise.resolve<QueryFallback<OpenSlot[]>>({ data: [], error: null });
-      const [performanceResult, slotsResult] = await Promise.all([performancePromise, slotsPromise]).catch((error: unknown) => {
-        if (controller.signal.aborted || hasAbortName(error)) return [null, null] as const;
+      const secondaryResults = await Promise.all([performancePromise, slotsPromise]).catch((error: unknown) => {
+        if (controller.signal.aborted || hasAbortName(error)) return null;
         throw error;
       });
-      if (!performanceResult || !slotsResult || controller.signal.aborted || sequence !== loadSequence.current) return;
+      if (!secondaryResults || controller.signal.aborted || sequence !== loadSequence.current) return;
+      const [performanceResult, slotsResult] = secondaryResults;
       console.debug("ItemDrawer secondary queries", { itemId, ms: Math.round(performance.now() - detailStartedAt) });
 
       setDetails((current) => current?.item.id === itemResult.data.id ? {
