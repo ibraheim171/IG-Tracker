@@ -22,11 +22,12 @@ function one<T>(value: T | T[] | null) {
 export default async function HomePage() {
   const [profile, supabase] = await Promise.all([getCurrentProfile(), createClient()]);
   const since = new Date(Date.now() - 4 * 86_400_000).toISOString();
-  const [{ data: slotsData }, { data: tracks }, { data: ideaTypes }, { data: partners }] = await Promise.all([
+  const [{ data: slotsData }, { data: tracks }, { data: ideaTypes }, { data: partners }, { data: waitingRows }] = await Promise.all([
     supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items, n_ready").gte("slot_at", since).order("slot_at", { ascending: true }),
     supabase.from("tracks").select("id, name, color_hex").order("sort_order", { ascending: true }),
     supabase.from("idea_types").select("id, name").eq("active", true).order("id", { ascending: true }),
     supabase.from("partners").select("id, name").eq("active", true).order("name", { ascending: true }),
+    supabase.from("v_waiting").select("id, waiting_on"),
   ]);
   const slots = (slotsData ?? []) as BoardSlot[];
   const slotIds = slots.map((slot) => slot.slot_id).filter((id): id is string => Boolean(id));
@@ -34,8 +35,6 @@ export default async function HomePage() {
     ? await supabase.from("items").select("id, ref, title, status, slot_id, track_id, idea_type_id, tracks(name,color_hex), idea_types(name)").in("slot_id", slotIds)
     : { data: [] };
   const rawItems = (itemRows ?? []) as unknown as ItemWithLookups[];
-  const itemIds = rawItems.map((item) => item.id);
-  const { data: waitingRows } = itemIds.length ? await supabase.from("v_waiting").select("id, waiting_on").in("id", itemIds) : { data: [] };
   const waitingById = new Map((waitingRows ?? []).map((row) => [row.id, row.waiting_on]));
   const items: BoardItem[] = rawItems.map((item) => {
     const track = one(item.tracks);
