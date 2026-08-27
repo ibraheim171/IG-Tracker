@@ -47,8 +47,8 @@ export function SlotsBoard({ slots, items, tracks, ideaTypes, partners, currentU
     <main className="page wide-page stack">
       <header className="screen-head">
         <div>
-          <p className="eyebrow">الرئيسية</p>
-          <h1>فتحات النشر</h1>
+          <p className="eyebrow">الجدول</p>
+          <h1>خطة النشر</h1>
         </div>
       </header>
       <div className="slot-days">
@@ -71,9 +71,9 @@ export function SlotsBoard({ slots, items, tracks, ideaTypes, partners, currentU
                     <article className={`slot-card ${isEmpty ? "slot-empty" : ""}`} key={slot.slot_id}>
                       <div className="slot-topline">
                         <span className="num">{formatHebronDateTime(slot.slot_at)}</span>
-                        {isEmpty ? <span className="pill empty-pill">فتحة فارغة</span> : allPublished ? <span className="pill">جاهزة</span> : <span className="pill num">{slotItems.length.toLocaleString("en-US")} مواد</span>}
+                        {isEmpty ? <span className="pill empty-pill">موعد متاح</span> : allPublished ? <span className="pill">جاهزة</span> : <span className="pill num">{slotItems.length.toLocaleString("en-US")} مواد</span>}
                       </div>
-                      {isEmpty ? <p className="muted">لا توجد مواد مرتبطة بهذه الفتحة.</p> : (
+                      {isEmpty ? <p className="muted">لا توجد مواد مرتبطة بهذا الموعد.</p> : (
                         <div className="item-row-list">
                           {slotItems.map((item) => (
                             <button className="item-row" type="button" key={item.id} style={trackStyle(item.track_color)} onClick={() => setOpenItemId(item.id)}>
