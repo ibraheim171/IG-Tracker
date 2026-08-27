@@ -154,8 +154,21 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
         approvals: approvalRows = [],
         ...loadedItem
       } = itemResult.data as unknown as EmbeddedItemRow;
+      const baseDetails: DrawerDetails = {
+        item: loadedItem,
+        participants: participantRows,
+        partners: partnerRows,
+        approvals: approvalRows,
+        performance: null,
+        openSlots: [],
+      };
+      setDetails(baseDetails);
+      setEditable(buildEditable(baseDetails.item, baseDetails.partners));
+
       const shouldLoadPerformance = loadedItem.status === "published";
       const shouldLoadOpenSlots = loadedItem.status !== "published" && !loadedItem.slot_id;
+      if (!shouldLoadPerformance && !shouldLoadOpenSlots) return;
+
       const performancePromise = shouldLoadPerformance
         ? supabase.from("v_item_performance").select("*").eq("id", itemId).maybeSingle()
         : Promise.resolve<QueryFallback<PerformanceRow | null>>({ data: null, error: null });
@@ -165,16 +178,11 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
       const [performanceResult, slotsResult] = await Promise.all([performancePromise, slotsPromise]);
       if (cancelled) return;
 
-      const nextDetails: DrawerDetails = {
-        item: loadedItem,
-        participants: participantRows,
-        partners: partnerRows,
-        approvals: approvalRows,
+      setDetails((current) => current?.item.id === loadedItem.id ? {
+        ...current,
         performance: performanceResult.error ? null : performanceResult.data,
         openSlots: slotsResult.error ? [] : slotsResult.data ?? [],
-      };
-      setDetails(nextDetails);
-      setEditable(buildEditable(nextDetails.item, nextDetails.partners));
+      } : current);
     }
     void load();
     return () => {
