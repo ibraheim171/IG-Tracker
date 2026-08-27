@@ -1,7 +1,7 @@
 import { MyMaterials } from "@/components/my-materials";
 import { getCurrentProfile } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
-import type { IdeaTypeOption, MyMaterial, PartnerOption, ParticipantPart, TrackOption } from "@/lib/ui-data";
+import type { MyMaterial, ParticipantPart } from "@/lib/ui-data";
 
 type ParticipantItemRow = {
   item_id: string;
@@ -35,12 +35,10 @@ function one<T>(value: T | T[] | null) {
 
 export default async function MyPage() {
   const [profile, supabase] = await Promise.all([getCurrentProfile(), createClient()]);
-  const [{ data: participantRows }, { data: tracks }, { data: ideaTypes }, { data: partners }] = await Promise.all([
-    supabase.from("item_participants").select("item_id, part, items(id, ref, title, status, track_id, idea_type_id, tracks(name,color_hex), idea_types(name), publishing_slots(slot_at))").eq("user_id", profile.id),
-    supabase.from("tracks").select("id, name, color_hex").order("sort_order", { ascending: true }),
-    supabase.from("idea_types").select("id, name").eq("active", true).order("id", { ascending: true }),
-    supabase.from("partners").select("id, name").eq("active", true).order("name", { ascending: true }),
-  ]);
+  const { data: participantRows } = await supabase
+    .from("item_participants")
+    .select("item_id, part, items(id, ref, title, status, track_id, idea_type_id, tracks(name,color_hex), idea_types(name), publishing_slots(slot_at))")
+    .eq("user_id", profile.id);
 
   const materialsByItem = new Map<string, MyMaterial>();
   for (const row of (participantRows ?? []) as unknown as ParticipantItemRow[]) {
@@ -75,5 +73,5 @@ export default async function MyPage() {
   }
 
   const materials = Array.from(materialsByItem.values()).sort((a, b) => a.item.title.localeCompare(b.item.title, "ar"));
-  return <MyMaterials materials={materials} tracks={(tracks ?? []) as TrackOption[]} ideaTypes={(ideaTypes ?? []) as IdeaTypeOption[]} partners={(partners ?? []) as PartnerOption[]} currentUserId={profile.id} roles={profile.roles} />;
+  return <MyMaterials materials={materials} currentUserId={profile.id} roles={profile.roles} />;
 }
