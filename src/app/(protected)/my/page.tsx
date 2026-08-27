@@ -41,15 +41,24 @@ export default async function MyPage() {
     supabase.from("idea_types").select("id, name").eq("active", true).order("id", { ascending: true }),
     supabase.from("partners").select("id, name").eq("active", true).order("name", { ascending: true }),
   ]);
-  const materials: MyMaterial[] = ((participantRows ?? []) as unknown as ParticipantItemRow[]).flatMap((row) => {
+
+  const materialsByItem = new Map<string, MyMaterial>();
+  for (const row of (participantRows ?? []) as unknown as ParticipantItemRow[]) {
     const item = one(row.items);
-    if (!item) return [];
+    if (!item) continue;
+
+    const existing = materialsByItem.get(row.item_id);
+    if (existing) {
+      if (!existing.parts.includes(row.part)) existing.parts.push(row.part);
+      continue;
+    }
+
     const track = one(item.tracks);
     const ideaType = one(item.idea_types);
     const slot = one(item.publishing_slots);
-    return [{
+    materialsByItem.set(row.item_id, {
       item_id: row.item_id,
-      part: row.part,
+      parts: [row.part],
       item: {
         id: item.id,
         ref: item.ref,
@@ -62,7 +71,9 @@ export default async function MyPage() {
         idea_type: ideaType?.name ?? null,
         slot_at: slot?.slot_at ?? null,
       },
-    }];
-  }).sort((a, b) => a.item.title.localeCompare(b.item.title, "ar"));
+    });
+  }
+
+  const materials = Array.from(materialsByItem.values()).sort((a, b) => a.item.title.localeCompare(b.item.title, "ar"));
   return <MyMaterials materials={materials} tracks={(tracks ?? []) as TrackOption[]} ideaTypes={(ideaTypes ?? []) as IdeaTypeOption[]} partners={(partners ?? []) as PartnerOption[]} currentUserId={profile.id} roles={profile.roles} />;
 }
