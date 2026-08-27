@@ -22,6 +22,13 @@ type PartnerRecord = {
 
 type ApprovalRecord = Pick<Tables<"approvals">, "gate" | "result">;
 type OpenSlot = Pick<Tables<"v_slot_board">, "slot_id" | "slot_at" | "state" | "n_items">;
+type QueryFallback<T> = { data: T; error: null };
+
+type EmbeddedItemRow = ItemRow & {
+  item_participants?: ParticipantRecord[];
+  item_partners?: PartnerRecord[];
+  approvals?: ApprovalRecord[];
+};
 
 type DrawerDetails = {
   item: ItemRow;
@@ -127,26 +134,44 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
         return;
       }
       setMessage(null);
-      const [itemResult, participantsResult, partnersResult, approvalsResult, performanceResult, slotsResult] = await Promise.all([
-        supabase.from("items").select("*").eq("id", itemId).single(),
-        supabase.from("item_participants").select("user_id, part, profiles(display_name)").eq("item_id", itemId),
-        supabase.from("item_partners").select("partner_id, partners(name)").eq("item_id", itemId),
-        supabase.from("approvals").select("gate, result").eq("item_id", itemId),
-        supabase.from("v_item_performance").select("*").eq("id", itemId).maybeSingle(),
-        supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24),
-      ]);
+      setDetails(null);
+      setEditable(null);
+
+      const itemResult = await supabase
+        .from("items")
+        .select("*, item_participants(user_id, part, profiles(display_name)), item_partners(partner_id, partners(name)), approvals(gate, result)")
+        .eq("id", itemId)
+        .single();
       if (cancelled) return;
       if (itemResult.error) {
         setMessage(extractMessage(itemResult.error));
         return;
       }
+
+      const {
+        item_participants: participantRows = [],
+        item_partners: partnerRows = [],
+        approvals: approvalRows = [],
+        ...loadedItem
+      } = itemResult.data as unknown as EmbeddedItemRow;
+      const shouldLoadPerformance = loadedItem.status === "published";
+      const shouldLoadOpenSlots = loadedItem.status !== "published" && !loadedItem.slot_id;
+      const performancePromise = shouldLoadPerformance
+        ? supabase.from("v_item_performance").select("*").eq("id", itemId).maybeSingle()
+        : Promise.resolve<QueryFallback<PerformanceRow | null>>({ data: null, error: null });
+      const slotsPromise = shouldLoadOpenSlots
+        ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24)
+        : Promise.resolve<QueryFallback<OpenSlot[]>>({ data: [], error: null });
+      const [performanceResult, slotsResult] = await Promise.all([performancePromise, slotsPromise]);
+      if (cancelled) return;
+
       const nextDetails: DrawerDetails = {
-        item: itemResult.data,
-        participants: (participantsResult.data ?? []) as unknown as ParticipantRecord[],
-        partners: (partnersResult.data ?? []) as unknown as PartnerRecord[],
-        approvals: approvalsResult.data ?? [],
-        performance: performanceResult.data,
-        openSlots: slotsResult.data ?? [],
+        item: loadedItem,
+        participants: participantRows,
+        partners: partnerRows,
+        approvals: approvalRows,
+        performance: performanceResult.error ? null : performanceResult.data,
+        openSlots: slotsResult.error ? [] : slotsResult.data ?? [],
       };
       setDetails(nextDetails);
       setEditable(buildEditable(nextDetails.item, nextDetails.partners));
