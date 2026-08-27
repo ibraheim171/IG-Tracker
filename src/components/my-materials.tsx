@@ -1,16 +1,13 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { ItemDrawer } from "@/components/item-drawer";
-import type { IdeaTypeOption, MyMaterial, PartnerOption, RoleName, TrackOption } from "@/lib/ui-data";
+import type { MyMaterial, RoleName } from "@/lib/ui-data";
 import { formatHebronDateTime, statusLabels } from "@/lib/ui-data";
 
 type Props = {
   materials: MyMaterial[];
-  tracks: TrackOption[];
-  ideaTypes: IdeaTypeOption[];
-  partners: PartnerOption[];
   currentUserId: string;
   roles: RoleName[];
 };
@@ -19,12 +16,13 @@ function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function MyMaterials({ materials, tracks, ideaTypes, partners, currentUserId, roles }: Props) {
+export function MyMaterials({ materials, currentUserId, roles }: Props) {
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const isUnsubmittedWriterItem = (material: MyMaterial) => material.parts.includes("writer") && material.item.status === "idea";
   const current = materials.filter(isUnsubmittedWriterItem);
   const previous = materials.filter((material) => !isUnsubmittedWriterItem(material));
+  const openItem = useMemo(() => materials.find((material) => material.item_id === openItemId)?.item ?? null, [materials, openItemId]);
 
   return (
     <main className="page wide-page stack">
@@ -65,7 +63,7 @@ export function MyMaterials({ materials, tracks, ideaTypes, partners, currentUse
         ))}</div> : <p className="muted">لا توجد مواد سابقة.</p>}
       </section>
 
-      <ItemDrawer itemId={openItemId} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} tracks={tracks} ideaTypes={ideaTypes} partners={partners} currentUserId={currentUserId} roles={roles} largeCaption />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} largeCaption />
     </main>
   );
 }
