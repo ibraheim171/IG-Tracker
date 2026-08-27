@@ -92,14 +92,21 @@ returns integer
 language plpgsql security definer set search_path = public as $$
 declare n integer;
 begin
-  if coalesce(auth.role(), '') <> 'service_role' and not is_admin() then
+  if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' and not is_admin() then
     raise exception 'ROLE_REQUIRED: توليد مواعيد النشر يحتاج دور أدمن';
   end if;
 
-  with gen as (
-    select ((d::date + time '21:00') at time zone app_tz()) as slot_at
-      from generate_series(current_date, current_date + (p_weeks * 7), interval '1 day') d
-     where extract(isodow from d) in (1, 2, 6)   -- Mon, Tue, Sat
+  with bounds as (
+    select (now() at time zone app_tz())::date as start_date
+  ),
+  gen as (
+    select ((local_day + time '21:00') at time zone app_tz()) as slot_at
+      from bounds
+      cross join generate_series(0, p_weeks * 7) as offset_days(day_offset)
+      cross join lateral (
+        select bounds.start_date + offset_days.day_offset as local_day
+      ) as days
+     where extract(isodow from local_day) in (1, 2, 6)
   )
   insert into publishing_slots (slot_at)
   select slot_at from gen
