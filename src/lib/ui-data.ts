@@ -8,6 +8,22 @@ export type TrackOption = Pick<Tables<"tracks">, "id" | "name" | "color_hex">;
 export type IdeaTypeOption = Pick<Tables<"idea_types">, "id" | "name">;
 export type PartnerOption = Pick<Tables<"partners">, "id" | "name">;
 
+export type DrawerPreview = {
+  id: string;
+  ref: string;
+  title: string;
+  status: ItemStatus;
+  track_id: number | null;
+  track_name: string | null;
+  track_color: string | null;
+  idea_type_id?: number | null;
+  idea_type: string | null;
+  slot_at?: string | null;
+  caption?: string | null;
+  production_file_url?: string | null;
+  partners?: string | null;
+};
+
 export type BoardSlot = {
   slot_id: string;
   slot_at: string | null;
