@@ -22,9 +22,9 @@ body {
   font-family: var(--font-body), sans-serif;
 }
 
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 
-button, input, select { min-block-size: 44px; }
+button, input, select, textarea { min-block-size: 44px; }
 
 button { cursor: pointer; }
 
@@ -34,19 +34,67 @@ button { cursor: pointer; }
 }
 
 .page { inline-size: min(100%, 48rem); margin-inline: auto; padding: 1.25rem; }
+.wide-page { inline-size: min(100%, 64rem); }
 .auth-page { display: grid; min-block-size: 100dvh; align-items: center; }
-.card { background: var(--card); border: 1px solid var(--rule); border-radius: 0.75rem; padding: 1.25rem; }
+.card { background: var(--card); border: 1px solid var(--rule); border-radius: 0.5rem; padding: 1.25rem; }
 .stack { display: grid; gap: 1rem; }
 .field { display: grid; gap: 0.5rem; font-weight: 700; }
 .input { inline-size: 100%; border: 1px solid var(--rule); border-radius: 0.5rem; background: var(--card); color: var(--ink); padding-inline: 0.75rem; }
+.textarea { padding-block: 0.75rem; min-block-size: 7rem; resize: vertical; }
+.textarea-large { min-block-size: 16rem; }
 .button { border: 0; border-radius: 0.5rem; background: var(--accent); color: var(--card); font-family: var(--font-heading), sans-serif; font-weight: 700; padding-inline: 1rem; }
 .button-secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
 .muted { color: color-mix(in srgb, var(--ink) 65%, var(--card)); }
 .error { color: var(--accent); font-weight: 700; }
-.header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-block-end: 1px solid var(--rule); padding: 0.75rem 1.25rem; background: var(--card); }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-block-end: 1px solid var(--rule); padding: 0.75rem 1.25rem; background: var(--card); flex-wrap: wrap; }
+.nav-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.nav-links a { color: var(--ink); text-decoration: none; border: 1px solid var(--rule); border-radius: 0.5rem; padding: 0.55rem 0.75rem; min-block-size: 44px; display: inline-flex; align-items: center; }
 .table-wrap { overflow-inline: auto; }
 table { inline-size: 100%; border-collapse: collapse; }
 th, td { border-block-end: 1px solid var(--rule); padding: 0.75rem; text-align: start; vertical-align: middle; }
 fieldset { border: 1px solid var(--rule); border-radius: 0.5rem; padding: 0.75rem; }
 .checks { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 h1, h2 { font-family: var(--font-heading), sans-serif; }
+
+.screen-head { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
+.eyebrow { margin: 0; color: var(--accent); font-family: var(--font-heading), sans-serif; font-weight: 700; }
+.date-group { display: grid; gap: 0.75rem; }
+.date-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; border-block-end: 1px solid var(--rule); padding-block-end: 0.5rem; }
+.date-head h2, .screen-head h1, .drawer-head h2 { margin: 0; }
+.slot-days, .slot-list, .ready-list, .item-row-list, .drawer-stack { display: grid; gap: 0.75rem; }
+.slot-card, .ready-card { background: var(--card); border: 1px solid var(--rule); border-radius: 0.5rem; padding: 1rem; display: grid; gap: 0.75rem; }
+.ready-card { border-inline-start: 0.35rem solid var(--track-color, var(--rule)); }
+.slot-empty { border-style: dashed; border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 28%, var(--card)); }
+.slot-topline, .ready-head, .actions-row, .pill-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; min-block-size: 1.75rem; border: 1px solid var(--rule); border-radius: 999px; padding-inline: 0.65rem; background: var(--card); font-size: 0.9rem; }
+.track-pill { border-color: var(--track-color, var(--rule)); box-shadow: inset 0 -0.2rem 0 color-mix(in srgb, var(--track-color, var(--rule)) 30%, transparent); }
+.empty-pill, .notice { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.notice, .soft-banner { background: color-mix(in srgb, var(--accent-soft) 45%, var(--card)); border: 1px solid var(--rule); border-radius: 0.5rem; padding: 0.75rem; }
+.item-row { inline-size: 100%; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.35rem; text-align: start; background: var(--card); color: var(--ink); border: 1px solid var(--rule); border-inline-start: 0.35rem solid var(--track-color, var(--rule)); border-radius: 0.5rem; padding: 0.75rem; }
+.item-row:hover, .nav-links a:hover { border-color: var(--accent); }
+.item-title { font-weight: 800; min-inline-size: 0; overflow-wrap: anywhere; }
+.subtle-ref { color: color-mix(in srgb, var(--ink) 55%, var(--card)); font-size: 0.85rem; }
+.title-forward .subtle-ref { display: none; }
+.read-box { white-space: pre-wrap; max-block-size: 18rem; overflow: auto; border: 1px solid var(--rule); border-radius: 0.5rem; padding: 0.75rem; background: color-mix(in srgb, var(--paper) 55%, var(--card)); }
+.veil { position: fixed; inset: 0; z-index: 50; background: color-mix(in srgb, var(--ink) 42%, transparent); display: grid; align-items: end; }
+.drawer, .confirm-panel { background: var(--card); color: var(--ink); border: 1px solid var(--rule); box-shadow: 0 1rem 3rem color-mix(in srgb, var(--ink) 18%, transparent); }
+.drawer { inline-size: 100%; max-block-size: 88dvh; overflow: auto; border-radius: 0.5rem 0.5rem 0 0; padding: 1rem; position: relative; }
+.confirm-panel { inline-size: min(100% - 2rem, 34rem); margin-inline: auto; margin-block-end: 1rem; border-radius: 0.5rem; padding: 1rem; }
+.drawer-close { position: sticky; inset-block-start: 0; margin-inline-start: auto; z-index: 1; }
+.icon-button { inline-size: 44px; block-size: 44px; border: 1px solid var(--rule); border-radius: 0.5rem; background: var(--card); color: var(--ink); font-size: 1.4rem; }
+.drawer-head, .drawer-section { display: grid; gap: 0.75rem; border-block-end: 1px solid var(--rule); padding-block-end: 1rem; }
+.meta-grid, .form-grid, .metric-grid { display: grid; gap: 0.75rem; }
+.meta-label { display: block; color: color-mix(in srgb, var(--ink) 60%, var(--card)); margin-block-end: 0.35rem; }
+.steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.35rem; }
+.step { border: 1px solid var(--rule); border-radius: 0.5rem; padding: 0.55rem; font-size: 0.85rem; background: var(--card); text-align: center; }
+.step.is-done { background: color-mix(in srgb, var(--accent-soft) 40%, var(--card)); }
+.step.is-current { border-color: var(--accent); font-weight: 800; }
+.override-box { display: grid; gap: 0.75rem; border: 1px solid var(--accent); border-radius: 0.5rem; padding: 0.75rem; }
+
+@media (min-width: 48rem) {
+  .veil { align-items: stretch; justify-items: end; }
+  .drawer { inline-size: min(34rem, 100%); max-block-size: 100dvh; border-radius: 0; }
+  .confirm-panel { align-self: center; margin-block-end: 0; }
+  .item-row { grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; }
+  .meta-grid, .form-grid, .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
