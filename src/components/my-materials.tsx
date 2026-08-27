@@ -42,6 +42,7 @@ export function MyMaterials({ materials, tracks, ideaTypes, partners, currentUse
         </header>
         {current.length ? <div className="item-row-list">{current.map((material) => (
           <button className="item-row title-forward" key={material.item_id} type="button" style={trackStyle(material.item.track_color)} onClick={() => setOpenItemId(material.item_id)}>
+            <span className="num ref-pill">{material.item.ref}</span>
             <span className="item-title">{material.item.title}</span>
             <span className="pill">{material.item.track_name ?? "—"}</span>
             <span className="muted">{material.item.idea_type ?? "—"}</span>
@@ -56,6 +57,7 @@ export function MyMaterials({ materials, tracks, ideaTypes, partners, currentUse
         </header>
         {previous.length ? <div className="item-row-list">{previous.map((material) => (
           <button className="item-row title-forward" key={material.item_id} type="button" style={trackStyle(material.item.track_color)} onClick={() => setOpenItemId(material.item_id)}>
+            <span className="num ref-pill">{material.item.ref}</span>
             <span className="item-title">{material.item.title}</span>
             <span className="pill">{statusLabels[material.item.status]}</span>
             {material.item.slot_at ? <span className="num muted">{formatHebronDateTime(material.item.slot_at)}</span> : null}
