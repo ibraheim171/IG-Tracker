@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
+import { useReferenceData } from "@/components/reference-data-provider";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types";
-import type { IdeaTypeOption, ItemStatus, PartnerOption, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
+import type { DrawerPreview, IdeaTypeOption, ItemStatus, PartnerOption, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
 import { extractMessage, formatHebronDateTime, formatNumber, formatPercent, isAdminRole, isReviewerRole, parseRuleMessage, statusLabels } from "@/lib/ui-data";
 
 type ItemRow = Tables<"items">;
@@ -23,12 +24,6 @@ type PartnerRecord = {
 type ApprovalRecord = Pick<Tables<"approvals">, "gate" | "result">;
 type OpenSlot = Pick<Tables<"v_slot_board">, "slot_id" | "slot_at" | "state" | "n_items">;
 type QueryFallback<T> = { data: T; error: null };
-
-type EmbeddedItemRow = ItemRow & {
-  item_participants?: ParticipantRecord[];
-  item_partners?: PartnerRecord[];
-  approvals?: ApprovalRecord[];
-};
 
 type DrawerDetails = {
   item: ItemRow;
@@ -52,11 +47,9 @@ type EditableState = {
 
 type Props = {
   itemId: string | null;
+  initialItem?: DrawerPreview | null;
   onClose: () => void;
   onChanged?: () => void;
-  tracks: TrackOption[];
-  ideaTypes: IdeaTypeOption[];
-  partners: PartnerOption[];
   currentUserId: string;
   roles: RoleName[];
   largeCaption?: boolean;
@@ -103,8 +96,23 @@ function buildEditable(item: ItemRow, partnerRows: PartnerRecord[]): EditableSta
   };
 }
 
-export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, partners, currentUserId, roles, largeCaption }: Props) {
+function findTrack(tracks: TrackOption[], item: ItemRow | DrawerPreview | null) {
+  return tracks.find((track) => track.id === item?.track_id) ?? null;
+}
+
+function findIdeaType(ideaTypes: IdeaTypeOption[], item: ItemRow | DrawerPreview | null) {
+  const ideaTypeId = "idea_type_id" in (item ?? {}) ? item?.idea_type_id : null;
+  return ideaTypes.find((ideaType) => ideaType.id === ideaTypeId) ?? null;
+}
+
+function hasAbortName(error: unknown) {
+  return typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError";
+}
+
+export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, largeCaption }: Props) {
+  const { tracks, ideaTypes, partners } = useReferenceData();
   const supabase = useMemo(() => createClient(), []);
+  const loadSequence = useRef(0);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
   const [editable, setEditable] = useState<EditableState | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -113,9 +121,15 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
   const [rejectNote, setRejectNote] = useState("");
   const [isPending, startTransition] = useTransition();
 
+  const preview = initialItem?.id === itemId ? initialItem : null;
   const item = details?.item ?? null;
-  const currentTrack = tracks.find((track) => track.id === item?.track_id);
-  const currentIdeaType = ideaTypes.find((ideaType) => ideaType.id === item?.idea_type_id);
+  const displayItem = item ?? preview;
+  const currentTrack = findTrack(tracks, displayItem);
+  const currentIdeaType = findIdeaType(ideaTypes, displayItem);
+  const trackName = currentTrack?.name ?? preview?.track_name ?? null;
+  const trackColor = currentTrack?.color_hex ?? preview?.track_color ?? null;
+  const ideaTypeName = currentIdeaType?.name ?? preview?.idea_type ?? null;
+  const isDetailsReady = Boolean(item && editable && details);
   const isAdmin = isAdminRole(roles);
   const isReviewer = isReviewerRole(roles);
   const participantParts = details?.participants.filter((row) => row.user_id === currentUserId).map((row) => row.part) ?? [];
@@ -124,69 +138,93 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
   const isProducer = participantParts.includes("producer");
   const hasProducer = details?.participants.some((row) => row.part === "producer") ?? false;
   const hasApprovalHistory = details?.approvals.some((approval) => approval.result === "approve") ?? false;
+  const captionText = item?.caption ?? preview?.caption ?? null;
+  const productionFileUrl = item?.production_file_url ?? preview?.production_file_url ?? null;
 
   useEffect(() => {
-    let cancelled = false;
+    const sequence = ++loadSequence.current;
+    const controller = new AbortController();
+
     async function load() {
       if (!itemId) {
         setDetails(null);
         setEditable(null);
+        setMessage(null);
         return;
       }
       setMessage(null);
       setDetails(null);
       setEditable(null);
+      setFailedAdvance(null);
+      setOverrideReason("");
+      setRejectNote("");
 
-      const itemResult = await supabase
-        .from("items")
-        .select("*, item_participants(user_id, part, profiles(display_name)), item_partners(partner_id, partners(name)), approvals(gate, result)")
-        .eq("id", itemId)
-        .single();
-      if (cancelled) return;
+      const startedAt = performance.now();
+      const [itemResult, participantsResult, partnersResult, approvalsResult] = await Promise.all([
+        supabase.from("items").select("*").eq("id", itemId).single().abortSignal(controller.signal),
+        supabase.from("item_participants").select("user_id, part, profiles(display_name)").eq("item_id", itemId).abortSignal(controller.signal),
+        supabase.from("item_partners").select("partner_id, partners(name)").eq("item_id", itemId).abortSignal(controller.signal),
+        supabase.from("approvals").select("gate, result").eq("item_id", itemId).abortSignal(controller.signal),
+      ]).catch((error: unknown) => {
+        if (controller.signal.aborted || hasAbortName(error)) return null;
+        throw error;
+      });
+      if (!itemResult || controller.signal.aborted || sequence !== loadSequence.current) return;
+      console.debug("ItemDrawer basic queries", { itemId, ms: Math.round(performance.now() - startedAt) });
       if (itemResult.error) {
         setMessage(extractMessage(itemResult.error));
         return;
       }
+      const relationError = participantsResult.error ?? partnersResult.error ?? approvalsResult.error;
+      if (relationError) {
+        console.error("ItemDrawer relation query failed", relationError);
+        setMessage(extractMessage(relationError));
+        return;
+      }
 
-      const {
-        item_participants: participantRows = [],
-        item_partners: partnerRows = [],
-        approvals: approvalRows = [],
-        ...loadedItem
-      } = itemResult.data as unknown as EmbeddedItemRow;
       const baseDetails: DrawerDetails = {
-        item: loadedItem,
-        participants: participantRows,
-        partners: partnerRows,
-        approvals: approvalRows,
+        item: itemResult.data,
+        participants: (participantsResult.data ?? []) as unknown as ParticipantRecord[],
+        partners: (partnersResult.data ?? []) as unknown as PartnerRecord[],
+        approvals: approvalsResult.data ?? [],
         performance: null,
         openSlots: [],
       };
       setDetails(baseDetails);
       setEditable(buildEditable(baseDetails.item, baseDetails.partners));
 
-      const shouldLoadPerformance = loadedItem.status === "published";
-      const shouldLoadOpenSlots = loadedItem.status !== "published" && !loadedItem.slot_id;
+      const shouldLoadPerformance = itemResult.data.status === "published";
+      const shouldLoadOpenSlots = itemResult.data.status !== "published" && !itemResult.data.slot_id;
       if (!shouldLoadPerformance && !shouldLoadOpenSlots) return;
 
+      const detailStartedAt = performance.now();
       const performancePromise = shouldLoadPerformance
-        ? supabase.from("v_item_performance").select("*").eq("id", itemId).maybeSingle()
+        ? supabase.from("v_item_performance").select("*").eq("id", itemId).maybeSingle().abortSignal(controller.signal)
         : Promise.resolve<QueryFallback<PerformanceRow | null>>({ data: null, error: null });
       const slotsPromise = shouldLoadOpenSlots
-        ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24)
+        ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24).abortSignal(controller.signal)
         : Promise.resolve<QueryFallback<OpenSlot[]>>({ data: [], error: null });
-      const [performanceResult, slotsResult] = await Promise.all([performancePromise, slotsPromise]);
-      if (cancelled) return;
+      const [performanceResult, slotsResult] = await Promise.all([performancePromise, slotsPromise]).catch((error: unknown) => {
+        if (controller.signal.aborted || hasAbortName(error)) return [null, null] as const;
+        throw error;
+      });
+      if (!performanceResult || !slotsResult || controller.signal.aborted || sequence !== loadSequence.current) return;
+      console.debug("ItemDrawer secondary queries", { itemId, ms: Math.round(performance.now() - detailStartedAt) });
 
-      setDetails((current) => current?.item.id === loadedItem.id ? {
+      setDetails((current) => current?.item.id === itemResult.data.id ? {
         ...current,
         performance: performanceResult.error ? null : performanceResult.data,
         openSlots: slotsResult.error ? [] : slotsResult.data ?? [],
       } : current);
     }
-    void load();
+
+    void load().catch((error: unknown) => {
+      if (controller.signal.aborted || sequence !== loadSequence.current || hasAbortName(error)) return;
+      console.error("ItemDrawer load failed", error);
+      setMessage(extractMessage(error));
+    });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [itemId, supabase]);
 
@@ -322,36 +360,39 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
     <div className="veil" onClick={onClose}>
       <aside className="drawer" onClick={(event) => event.stopPropagation()} aria-label="بطاقة المادة">
         <button className="icon-button drawer-close" type="button" onClick={onClose} aria-label="إغلاق">×</button>
-        {!item || !editable || !drawerDetails ? <p>جارٍ التحميل...</p> : (
+        {!displayItem ? <p>جارٍ التحميل...</p> : (
           <div className="drawer-stack">
             <header className="drawer-head">
-              <span className="num ref-pill">{item.ref}</span>
-              <h2>{item.title}</h2>
+              <span className="num ref-pill">{displayItem.ref}</span>
+              <h2>{displayItem.title}</h2>
               <div className="pill-row">
-                {currentTrack ? <span className="pill track-pill" style={trackStyle(currentTrack.color_hex)}>{currentTrack.name}</span> : null}
-                {currentIdeaType ? <span className="pill">{currentIdeaType.name}</span> : null}
-                {item.is_archived ? <span className="pill">مؤرشفة</span> : null}
+                {trackName ? <span className="pill track-pill" style={trackStyle(trackColor)}>{trackName}</span> : null}
+                {ideaTypeName ? <span className="pill">{ideaTypeName}</span> : null}
+                {item?.is_archived ? <span className="pill">مؤرشفة</span> : null}
               </div>
             </header>
 
             {message ? <p className="notice">{message}</p> : null}
+            {!isDetailsReady ? <p className="muted">جارٍ تحميل التفاصيل والإجراءات...</p> : null}
 
-            <section className="meta-grid">
-              <div><span className="meta-label">الشركاء</span><div className="pill-row">{drawerDetails.partners.length ? drawerDetails.partners.map((row) => <span className="pill" key={row.partner_id}>{partnerName(row.partners)}</span>) : <span>—</span>}</div></div>
-              <div><span className="meta-label">الفريق</span><div className="pill-row">{drawerDetails.participants.map((row) => <span className="pill" key={`${row.user_id}-${row.part}`}>{profileName(row.profiles)} · {row.part === "writer" ? "كاتب" : row.part === "producer" ? "منتج" : "مراجع"}</span>)}</div></div>
-            </section>
+            {drawerDetails ? (
+              <section className="meta-grid">
+                <div><span className="meta-label">الشركاء</span><div className="pill-row">{drawerDetails.partners.length ? drawerDetails.partners.map((row) => <span className="pill" key={row.partner_id}>{partnerName(row.partners)}</span>) : <span>—</span>}</div></div>
+                <div><span className="meta-label">الفريق</span><div className="pill-row">{drawerDetails.participants.map((row) => <span className="pill" key={`${row.user_id}-${row.part}`}>{profileName(row.profiles)} · {row.part === "writer" ? "كاتب" : row.part === "producer" ? "منتج" : "مراجع"}</span>)}</div></div>
+              </section>
+            ) : null}
 
             <section className="steps">
               {pipeline.map((step) => {
-                const currentIndex = order.indexOf(item.status);
+                const currentIndex = order.indexOf(displayItem.status);
                 const stepIndex = order.indexOf(step.key);
-                const isDone = item.status === "published" || currentIndex > stepIndex;
-                const isCurrent = item.status !== "published" && (item.status === step.key || (step.key === "published" && (item.status === "ready" || item.status === "design_approved")));
+                const isDone = displayItem.status === "published" || currentIndex > stepIndex;
+                const isCurrent = displayItem.status !== "published" && (displayItem.status === step.key || (step.key === "published" && (displayItem.status === "ready" || displayItem.status === "design_approved")));
                 return <span className={`step ${isDone ? "is-done" : ""} ${isCurrent ? "is-current" : ""}`} key={step.key}>{isDone ? "✓ " : ""}{step.label}</span>;
               })}
             </section>
 
-            {canEdit(item) ? (
+            {item && editable && canEdit(item) ? (
               <section className="drawer-section stack">
                 <h3>الحقول</h3>
                 <label className="field">العنوان<input className="input" value={editable.title} onChange={(event) => setEditable({ ...editable, title: event.target.value })} /></label>
@@ -377,16 +418,16 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
 
             <section className="drawer-section stack">
               <h3>الكابشن</h3>
-              <div className="read-box">{item.caption || "—"}</div>
-              <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(item.caption ?? "")}>نسخ الكابشن</button>
-              {item.notes ? <p>{item.notes}</p> : null}
+              <div className="read-box">{captionText || "—"}</div>
+              <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(captionText ?? "")}>نسخ الكابشن</button>
+              {item?.notes ? <p>{item.notes}</p> : null}
               <div className="actions-row">
-                {item.production_file_url ? <a className="button button-secondary" href={item.production_file_url} target="_blank" rel="noreferrer">فتح ملف الإنتاج</a> : null}
-                {item.ig_permalink ? <a className="button button-secondary" href={item.ig_permalink} target="_blank" rel="noreferrer">فتح المنشور</a> : null}
+                {productionFileUrl ? <a className="button button-secondary" href={productionFileUrl} target="_blank" rel="noreferrer">فتح ملف الإنتاج</a> : null}
+                {item?.ig_permalink ? <a className="button button-secondary" href={item.ig_permalink} target="_blank" rel="noreferrer">فتح المنشور</a> : null}
               </div>
             </section>
 
-            {item.status === "published" && performance ? (
+            {item?.status === "published" && performance ? (
               <section className="drawer-section stack">
                 <h3>الأداء</h3>
                 {performance.signal_partial ? <p className="soft-banner">قياس ناقص</p> : null}
@@ -399,7 +440,7 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
               </section>
             ) : null}
 
-            {!item.is_archived ? (
+            {item && editable && !item.is_archived ? (
               <section className="drawer-section stack">
                 <h3>الإجراءات</h3>
                 {item.status === "idea" && isWriter ? <button className="button" type="button" disabled={isPending} onClick={() => window.confirm("متأكد أنك جاهز للتسليم؟") && runAction(() => advance("writing"))}>تسليم</button> : null}
@@ -421,7 +462,7 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
                 {item.status === "design_approved" && (isParticipant || isAdmin) ? <button className="button" type="button" disabled={isPending} onClick={() => runAction(() => advance("ready"))}>انتقل إلى جاهز للنشر</button> : null}
                 {item.status === "ready" ? <p className="muted">تظهر هذه المادة في شاشة جاهز للنشر.</p> : null}
                 {!item.slot_id && item.status !== "published" ? (
-                  <label className="field">موعد النشر<select className="input" defaultValue="" onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails.openSlots.map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
+                  <label className="field">موعد النشر<select className="input" defaultValue="" onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails?.openSlots.map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
                 ) : null}
                 {isAdmin && failedAdvance ? (
                   <div className="override-box">
@@ -432,7 +473,7 @@ export function ItemDrawer({ itemId, onClose, onChanged, tracks, ideaTypes, part
               </section>
             ) : null}
 
-            <p className="muted">الحالة الحالية: {statusLabels[item.status]}</p>
+            <p className="muted">الحالة الحالية: {statusLabels[displayItem.status]}</p>
           </div>
         )}
       </aside>
