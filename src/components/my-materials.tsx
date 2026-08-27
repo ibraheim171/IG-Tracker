@@ -22,8 +22,9 @@ function trackStyle(color: string | null) {
 export function MyMaterials({ materials, tracks, ideaTypes, partners, currentUserId, roles }: Props) {
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
-  const current = materials.filter((material) => material.part === "writer" && material.item.status === "idea");
-  const previous = materials.filter((material) => !(material.part === "writer" && material.item.status === "idea"));
+  const isUnsubmittedWriterItem = (material: MyMaterial) => material.parts.includes("writer") && material.item.status === "idea";
+  const current = materials.filter(isUnsubmittedWriterItem);
+  const previous = materials.filter((material) => !isUnsubmittedWriterItem(material));
 
   return (
     <main className="page wide-page stack">
@@ -54,7 +55,7 @@ export function MyMaterials({ materials, tracks, ideaTypes, partners, currentUse
           <span className="pill num">{previous.length.toLocaleString("en-US")}</span>
         </header>
         {previous.length ? <div className="item-row-list">{previous.map((material) => (
-          <button className="item-row title-forward" key={`${material.item_id}-${material.part}`} type="button" style={trackStyle(material.item.track_color)} onClick={() => setOpenItemId(material.item_id)}>
+          <button className="item-row title-forward" key={material.item_id} type="button" style={trackStyle(material.item.track_color)} onClick={() => setOpenItemId(material.item_id)}>
             <span className="item-title">{material.item.title}</span>
             <span className="pill">{statusLabels[material.item.status]}</span>
             {material.item.slot_at ? <span className="num muted">{formatHebronDateTime(material.item.slot_at)}</span> : null}
