@@ -159,12 +159,13 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setOverrideReason("");
       setRejectNote("");
 
+      const requestClient = createClient({ signal: controller.signal });
       const startedAt = globalThis.performance.now();
       const baseResults = await Promise.all([
-        supabase.from("items").select("*").eq("id", itemId).single().abortSignal(controller.signal),
-        supabase.from("item_participants").select("user_id, part, profiles(display_name)").eq("item_id", itemId).abortSignal(controller.signal),
-        supabase.from("item_partners").select("partner_id, partners(name)").eq("item_id", itemId).abortSignal(controller.signal),
-        supabase.from("approvals").select("gate, result").eq("item_id", itemId).abortSignal(controller.signal),
+        requestClient.from("items").select("*").eq("id", itemId).single(),
+        requestClient.from("item_participants").select("user_id, part, profiles(display_name)").eq("item_id", itemId),
+        requestClient.from("item_partners").select("partner_id, partners(name)").eq("item_id", itemId),
+        requestClient.from("approvals").select("gate, result").eq("item_id", itemId),
       ]).catch((error: unknown) => {
         if (controller.signal.aborted || hasAbortName(error)) return null;
         throw error;
@@ -204,10 +205,10 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
 
       const detailStartedAt = globalThis.performance.now();
       const performancePromise = shouldLoadPerformance
-        ? supabase.from("v_item_performance").select("*").eq("id", itemId).maybeSingle().abortSignal(controller.signal)
+        ? requestClient.from("v_item_performance").select("*").eq("id", itemId).maybeSingle()
         : Promise.resolve<QueryFallback<PerformanceRow | null>>({ data: null, error: null });
       const slotsPromise = shouldLoadOpenSlots
-        ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24).abortSignal(controller.signal)
+        ? requestClient.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24)
         : Promise.resolve<QueryFallback<OpenSlot[]>>({ data: [], error: null });
       const secondaryResults = await Promise.all([performancePromise, slotsPromise]).catch((error: unknown) => {
         if (controller.signal.aborted || hasAbortName(error)) return null;
