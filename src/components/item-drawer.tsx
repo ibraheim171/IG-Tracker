@@ -67,6 +67,8 @@ const pipeline: { key: ItemStatus; label: string }[] = [
 
 const order: ItemStatus[] = ["idea", "writing", "content_approved", "in_production", "design_approved", "ready", "published"];
 const detailTimeoutMs = 10000;
+const autoSaveDelayMs = 1800;
+const itemFieldKeys: (keyof EditableState)[] = ["title", "track_id", "idea_type_id", "caption", "notes", "production_file_url"];
 
 function profileName(value: ParticipantRecord["profiles"]) {
   if (Array.isArray(value)) return value[0]?.display_name ?? "—";
@@ -99,6 +101,36 @@ function buildEditable(item: ItemRow, partnerRows: PartnerRecord[]): EditableSta
   };
 }
 
+function buildItemPayload(editable: EditableState): TablesUpdate<"items"> {
+  return {
+    title: editable.title,
+    track_id: editable.track_id ? Number(editable.track_id) : null,
+    idea_type_id: editable.idea_type_id ? Number(editable.idea_type_id) : null,
+    caption: editable.caption.trim() ? editable.caption : null,
+    notes: editable.notes.trim() ? editable.notes : null,
+    production_file_url: editable.production_file_url.trim() ? editable.production_file_url : null,
+  };
+}
+
+function itemPayloadSignature(payload: TablesUpdate<"items">) {
+  return JSON.stringify({
+    title: payload.title ?? null,
+    track_id: payload.track_id ?? null,
+    idea_type_id: payload.idea_type_id ?? null,
+    caption: payload.caption ?? null,
+    notes: payload.notes ?? null,
+    production_file_url: payload.production_file_url ?? null,
+  });
+}
+
+function editableSignature(editable: EditableState) {
+  return itemPayloadSignature(buildItemPayload(editable));
+}
+
+function touchesItemFields(patch: Partial<EditableState>) {
+  return itemFieldKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key));
+}
+
 function findTrack(tracks: TrackOption[], item: ItemRow | DrawerPreview | null) {
   return tracks.find((track) => track.id === item?.track_id) ?? null;
 }
@@ -116,6 +148,13 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const supabase = useMemo(() => createClient(), []);
   const loadSequence = useRef(0);
   const hasUserEditedFields = useRef(false);
+  const autoSaveTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const saveInFlightRef = useRef(false);
+  const queuedSaveRef = useRef<{ showMessage: boolean; notifyList: boolean } | null>(null);
+  const latestEditableRef = useRef<EditableState | null>(null);
+  const latestItemRef = useRef<ItemRow | null>(null);
+  const lastSavedSignatureRef = useRef<string | null>(null);
+  const needsListRefreshRef = useRef(false);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
   const [editable, setEditable] = useState<EditableState | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
@@ -147,12 +186,31 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const productionFileUrl = item?.production_file_url ?? preview?.production_file_url ?? null;
 
   useEffect(() => {
+    latestItemRef.current = item;
+  }, [item]);
+
+  useEffect(() => {
+    latestEditableRef.current = editable;
+  }, [editable]);
+
+  useEffect(() => () => {
+    clearAutoSaveTimer();
+    queuedSaveRef.current = null;
+  }, []);
+
+  useEffect(() => {
     const sequence = ++loadSequence.current;
     const controller = new AbortController();
     let didTimeout = false;
 
     async function load() {
       if (!itemId) {
+        clearAutoSaveTimer();
+        queuedSaveRef.current = null;
+        latestItemRef.current = null;
+        latestEditableRef.current = null;
+        lastSavedSignatureRef.current = null;
+        needsListRefreshRef.current = false;
         hasUserEditedFields.current = false;
         setDetails(null);
         setEditable(null);
@@ -163,6 +221,12 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       }
 
       hasUserEditedFields.current = false;
+      clearAutoSaveTimer();
+      queuedSaveRef.current = null;
+      latestItemRef.current = null;
+      latestEditableRef.current = null;
+      lastSavedSignatureRef.current = null;
+      needsListRefreshRef.current = false;
       setMessage(null);
       setLoadError(null);
       setLoadState("loading");
@@ -191,9 +255,13 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
           throw new Error("error" in payload ? payload.error : `HTTP_${response.status}`);
         }
 
+        const nextEditable = buildEditable(payload.details.item, payload.details.partners);
         hasUserEditedFields.current = false;
+        latestItemRef.current = payload.details.item;
+        latestEditableRef.current = nextEditable;
+        lastSavedSignatureRef.current = editableSignature(nextEditable);
         setDetails(payload.details);
-        setEditable(buildEditable(payload.details.item, payload.details.partners));
+        setEditable(nextEditable);
         setLoadState("ready");
       } catch (error) {
         if (sequence !== loadSequence.current) return;
@@ -213,48 +281,137 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     };
   }, [itemId, retryNonce]);
 
-  useEffect(() => {
-    if (!item || !editable || item.is_archived || !hasUserEditedFields.current) return;
-    const handle = window.setTimeout(() => {
+  function clearAutoSaveTimer() {
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+  }
+
+  function scheduleAutoSave() {
+    const currentItem = latestItemRef.current;
+    if (!currentItem || currentItem.is_archived) return;
+    clearAutoSaveTimer();
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
       void saveFields(false);
-    }, 1800);
-    return () => window.clearTimeout(handle);
-  }, [editable?.title, editable?.track_id, editable?.idea_type_id, editable?.caption, editable?.notes, editable?.production_file_url]);
+    }, autoSaveDelayMs);
+  }
+
+  function mergeQueuedSave(showMessage: boolean, notifyList: boolean) {
+    const current = queuedSaveRef.current;
+    queuedSaveRef.current = {
+      showMessage: Boolean(current?.showMessage || showMessage),
+      notifyList: Boolean(current?.notifyList || notifyList),
+    };
+  }
+
+  async function drainSaveQueue() {
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
+    try {
+      while (queuedSaveRef.current) {
+        const options = queuedSaveRef.current;
+        queuedSaveRef.current = null;
+        const currentItem = latestItemRef.current;
+        const currentEditable = latestEditableRef.current;
+        if (!currentItem || !currentEditable || currentItem.is_archived) continue;
+
+        const payload = buildItemPayload(currentEditable);
+        const signature = itemPayloadSignature(payload);
+        if (signature === lastSavedSignatureRef.current) {
+          hasUserEditedFields.current = false;
+          if (options.showMessage) setMessage("لا توجد تعديلات جديدة.");
+          if (options.notifyList && needsListRefreshRef.current) {
+            needsListRefreshRef.current = false;
+            onChanged?.();
+          }
+          continue;
+        }
+
+        const itemIdAtSave = currentItem.id;
+        const { data, error } = await supabase.from("items").update(payload).eq("id", itemIdAtSave).select("*").single();
+        if (error) {
+          if (latestItemRef.current?.id === itemIdAtSave) {
+            setMessage(parseRuleMessage(extractMessage(error)));
+          }
+          break;
+        }
+
+        if (latestItemRef.current?.id !== itemIdAtSave) continue;
+
+        const savedItem = data ?? ({ ...currentItem, ...payload } as ItemRow);
+        latestItemRef.current = savedItem;
+        lastSavedSignatureRef.current = signature;
+        setDetails((current) => current && current.item.id === itemIdAtSave ? { ...current, item: savedItem } : current);
+
+        const latestSignature = latestEditableRef.current ? editableSignature(latestEditableRef.current) : signature;
+        if (latestSignature === signature) {
+          hasUserEditedFields.current = false;
+          if (options.showMessage) setMessage("تم حفظ التعديلات.");
+          if (options.notifyList) {
+            needsListRefreshRef.current = false;
+            onChanged?.();
+          } else {
+            needsListRefreshRef.current = true;
+          }
+        } else {
+          hasUserEditedFields.current = true;
+          mergeQueuedSave(options.showMessage, options.notifyList);
+        }
+      }
+    } finally {
+      saveInFlightRef.current = false;
+      if (queuedSaveRef.current) void drainSaveQueue();
+    }
+  }
 
   function updateEditable(patch: Partial<EditableState>) {
-    hasUserEditedFields.current = true;
-    setEditable((current) => current ? { ...current, ...patch } : current);
+    const shouldAutoSave = touchesItemFields(patch);
+    setEditable((current) => {
+      if (!current) return current;
+      const next = { ...current, ...patch };
+      latestEditableRef.current = next;
+      return next;
+    });
+    if (shouldAutoSave) {
+      hasUserEditedFields.current = true;
+      scheduleAutoSave();
+    }
   }
 
   async function reloadAndNotify() {
     if (!itemId) return;
     const { data } = await supabase.from("items").select("*").eq("id", itemId).single();
     if (data) {
+      const nextEditable = buildEditable(data, details?.partners ?? []);
       hasUserEditedFields.current = false;
+      latestItemRef.current = data;
+      latestEditableRef.current = nextEditable;
+      lastSavedSignatureRef.current = editableSignature(nextEditable);
       setDetails((current) => current ? { ...current, item: data } : current);
-      setEditable((current) => current ? buildEditable(data, details?.partners ?? []) : current);
+      setEditable((current) => current ? nextEditable : current);
     }
     onChanged?.();
   }
 
   async function saveFields(showMessage = true) {
-    if (!item || !editable || item.is_archived) return;
-    const payload: TablesUpdate<"items"> = {
-      title: editable.title,
-      track_id: editable.track_id ? Number(editable.track_id) : null,
-      idea_type_id: editable.idea_type_id ? Number(editable.idea_type_id) : null,
-      caption: editable.caption.trim() ? editable.caption : null,
-      notes: editable.notes.trim() ? editable.notes : null,
-      production_file_url: editable.production_file_url.trim() ? editable.production_file_url : null,
-    };
-    const { error } = await supabase.from("items").update(payload).eq("id", item.id);
-    if (error) {
-      setMessage(parseRuleMessage(extractMessage(error)));
-      return;
+    if (showMessage) clearAutoSaveTimer();
+    const currentItem = latestItemRef.current;
+    const currentEditable = latestEditableRef.current;
+    if (!currentItem || !currentEditable || currentItem.is_archived) return;
+    mergeQueuedSave(showMessage, showMessage);
+    await drainSaveQueue();
+  }
+
+  function handleClose() {
+    clearAutoSaveTimer();
+    queuedSaveRef.current = null;
+    if (needsListRefreshRef.current) {
+      needsListRefreshRef.current = false;
+      onChanged?.();
     }
-    hasUserEditedFields.current = false;
-    if (showMessage) setMessage("تم حفظ التعديلات.");
-    onChanged?.();
+    onClose();
   }
 
   async function savePartners() {
@@ -355,9 +512,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const retryButton = loadState === "error" ? <button className="button button-secondary" type="button" onClick={() => setRetryNonce((current) => current + 1)}>إعادة المحاولة</button> : null;
 
   return (
-    <div className="veil" onClick={onClose}>
+    <div className="veil" onClick={handleClose}>
       <aside className="drawer" onClick={(event) => event.stopPropagation()} aria-label="بطاقة المادة">
-        <button className="icon-button drawer-close" type="button" onClick={onClose} aria-label="إغلاق">×</button>
+        <button className="icon-button drawer-close" type="button" onClick={handleClose} aria-label="إغلاق">×</button>
         {!displayItem ? (
           <div className="drawer-stack">
             {showDetailsLoading ? <p>جارٍ التحميل...</p> : null}
