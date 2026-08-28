@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { Tables } from "@/lib/database.types";
 import { createRouteClient } from "@/lib/supabase/route";
-import { extractMessage } from "@/lib/ui-data";
 
 type ItemRow = Tables<"items">;
 type PerformanceRow = Tables<"v_item_performance">;
@@ -32,6 +31,10 @@ type DrawerDetails = {
 
 export const dynamic = "force-dynamic";
 
+function itemDetailsError(code: string) {
+  return `تعذر تحميل تفاصيل المادة. حاول مرة أخرى. رمز التشخيص: ${code}.`;
+}
+
 function jsonWithCookies(source: NextResponse, body: { details: DrawerDetails } | { error: string }, init?: ResponseInit) {
   const response = NextResponse.json(body, init);
   response.headers.set("Cache-Control", "no-store");
@@ -59,18 +62,18 @@ export async function GET(request: NextRequest) {
   try {
     const [itemResult, participantsResult, partnersResult, approvalsResult] = await Promise.all([
       supabase.from("items").select("*").eq("id", itemId).abortSignal(request.signal).single(),
-      supabase.from("item_participants").select("user_id, part, profiles(display_name)").eq("item_id", itemId).abortSignal(request.signal),
+      supabase.from("item_participants").select("user_id, part, profiles:profiles!item_participants_user_id_fkey(display_name)").eq("item_id", itemId).abortSignal(request.signal),
       supabase.from("item_partners").select("partner_id, partners(name)").eq("item_id", itemId).abortSignal(request.signal),
       supabase.from("approvals").select("gate, result").eq("item_id", itemId).abortSignal(request.signal),
     ]);
 
     if (itemResult.error) {
-      return jsonWithCookies(cookieResponse, { error: extractMessage(itemResult.error) }, { status: itemResult.status === 406 ? 404 : itemResult.status });
+      return jsonWithCookies(cookieResponse, { error: itemDetailsError("ITEM_DETAILS_ITEM") }, { status: itemResult.status === 406 ? 404 : itemResult.status });
     }
 
     const relationError = participantsResult.error ?? partnersResult.error ?? approvalsResult.error;
     if (relationError) {
-      return jsonWithCookies(cookieResponse, { error: extractMessage(relationError) }, { status: 500 });
+      return jsonWithCookies(cookieResponse, { error: itemDetailsError("ITEM_DETAILS_RELATION") }, { status: 500 });
     }
 
     const item = itemResult.data;
@@ -96,11 +99,11 @@ export async function GET(request: NextRequest) {
     };
 
     return jsonWithCookies(cookieResponse, { details });
-  } catch (error) {
+  } catch {
     if (request.signal.aborted) {
       return jsonWithCookies(cookieResponse, { error: "توقف تحميل تفاصيل البطاقة." }, { status: 499 });
     }
 
-    return jsonWithCookies(cookieResponse, { error: extractMessage(error) }, { status: 500 });
+    return jsonWithCookies(cookieResponse, { error: itemDetailsError("ITEM_DETAILS_SERVER") }, { status: 500 });
   }
 }
