@@ -23,7 +23,6 @@ type PartnerRecord = {
 
 type ApprovalRecord = Pick<Tables<"approvals">, "gate" | "result">;
 type OpenSlot = Pick<Tables<"v_slot_board">, "slot_id" | "slot_at" | "state" | "n_items">;
-type QueryFallback<T> = { data: T; error: null };
 
 type DrawerDetails = {
   item: ItemRow;
@@ -33,6 +32,9 @@ type DrawerDetails = {
   performance: PerformanceRow | null;
   openSlots: OpenSlot[];
 };
+
+type ItemDetailsResponse = { details: DrawerDetails } | { error: string };
+type LoadState = "idle" | "loading" | "ready" | "error";
 
 type EditableState = {
   title: string;
@@ -64,6 +66,7 @@ const pipeline: { key: ItemStatus; label: string }[] = [
 ];
 
 const order: ItemStatus[] = ["idea", "writing", "content_approved", "in_production", "design_approved", "ready", "published"];
+const detailTimeoutMs = 10000;
 
 function profileName(value: ParticipantRecord["profiles"]) {
   if (Array.isArray(value)) return value[0]?.display_name ?? "—";
@@ -112,8 +115,12 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const { tracks, ideaTypes, partners } = useReferenceData();
   const supabase = useMemo(() => createClient(), []);
   const loadSequence = useRef(0);
+  const hasUserEditedFields = useRef(false);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
   const [editable, setEditable] = useState<EditableState | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>("idle");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [failedAdvance, setFailedAdvance] = useState<ItemStatus | null>(null);
@@ -128,7 +135,6 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const trackName = currentTrack?.name ?? preview?.track_name ?? null;
   const trackColor = currentTrack?.color_hex ?? preview?.track_color ?? null;
   const ideaTypeName = currentIdeaType?.name ?? preview?.idea_type ?? null;
-  const isDetailsReady = Boolean(item && editable && details);
   const isAdmin = isAdminRole(roles);
   const isReviewer = isReviewerRole(roles);
   const participantParts = details?.participants.filter((row) => row.user_id === currentUserId).map((row) => row.part) ?? [];
@@ -143,113 +149,90 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   useEffect(() => {
     const sequence = ++loadSequence.current;
     const controller = new AbortController();
+    let didTimeout = false;
 
     async function load() {
       if (!itemId) {
+        hasUserEditedFields.current = false;
         setDetails(null);
         setEditable(null);
+        setLoadState("idle");
+        setLoadError(null);
         setMessage(null);
         return;
       }
 
+      hasUserEditedFields.current = false;
       setMessage(null);
+      setLoadError(null);
+      setLoadState("loading");
       setDetails(null);
       setEditable(null);
       setFailedAdvance(null);
       setOverrideReason("");
       setRejectNote("");
 
-      const startedAt = globalThis.performance.now();
-      const baseResults = await Promise.all([
-        supabase.from("items").select("*").eq("id", itemId).abortSignal(controller.signal).single(),
-        supabase.from("item_participants").select("user_id, part, profiles(display_name)").eq("item_id", itemId).abortSignal(controller.signal),
-        supabase.from("item_partners").select("partner_id, partners(name)").eq("item_id", itemId).abortSignal(controller.signal),
-        supabase.from("approvals").select("gate, result").eq("item_id", itemId).abortSignal(controller.signal),
-      ]).catch((error: unknown) => {
-        if (controller.signal.aborted || hasAbortName(error)) return null;
-        throw error;
-      });
+      const timeoutId = window.setTimeout(() => {
+        didTimeout = true;
+        controller.abort();
+      }, detailTimeoutMs);
 
-      if (!baseResults || controller.signal.aborted || sequence !== loadSequence.current) return;
-      const [itemResult, participantsResult, partnersResult, approvalsResult] = baseResults;
-      console.debug("ItemDrawer basic queries", { itemId, ms: Math.round(globalThis.performance.now() - startedAt) });
+      try {
+        const response = await fetch(`/api/item-details?itemId=${encodeURIComponent(itemId)}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const payload = (await response.json()) as ItemDetailsResponse;
 
-      if (itemResult.error) {
-        setMessage(extractMessage(itemResult.error));
-        return;
+        if (controller.signal.aborted || sequence !== loadSequence.current) return;
+
+        if (!response.ok || "error" in payload) {
+          throw new Error("error" in payload ? payload.error : `HTTP_${response.status}`);
+        }
+
+        hasUserEditedFields.current = false;
+        setDetails(payload.details);
+        setEditable(buildEditable(payload.details.item, payload.details.partners));
+        setLoadState("ready");
+      } catch (error) {
+        if (sequence !== loadSequence.current) return;
+        if (controller.signal.aborted && !didTimeout) return;
+
+        setLoadState("error");
+        setLoadError(didTimeout ? "تعذر تحميل تفاصيل البطاقة خلال الوقت المتوقع. حاول مجددًا." : extractMessage(error));
+      } finally {
+        window.clearTimeout(timeoutId);
       }
-
-      const relationError = participantsResult.error ?? partnersResult.error ?? approvalsResult.error;
-      if (relationError) {
-        console.error("ItemDrawer relation query failed", relationError);
-        setMessage(extractMessage(relationError));
-        return;
-      }
-
-      const baseDetails: DrawerDetails = {
-        item: itemResult.data,
-        participants: (participantsResult.data ?? []) as unknown as ParticipantRecord[],
-        partners: (partnersResult.data ?? []) as unknown as PartnerRecord[],
-        approvals: approvalsResult.data ?? [],
-        performance: null,
-        openSlots: [],
-      };
-
-      setDetails(baseDetails);
-      setEditable(buildEditable(baseDetails.item, baseDetails.partners));
-
-      const shouldLoadPerformance = itemResult.data.status === "published";
-      const shouldLoadOpenSlots = itemResult.data.status !== "published" && !itemResult.data.slot_id;
-      if (!shouldLoadPerformance && !shouldLoadOpenSlots) return;
-
-      const detailStartedAt = globalThis.performance.now();
-      const performancePromise = shouldLoadPerformance
-        ? supabase.from("v_item_performance").select("*").eq("id", itemId).abortSignal(controller.signal).maybeSingle()
-        : Promise.resolve<QueryFallback<PerformanceRow | null>>({ data: null, error: null });
-      const slotsPromise = shouldLoadOpenSlots
-        ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24).abortSignal(controller.signal)
-        : Promise.resolve<QueryFallback<OpenSlot[]>>({ data: [], error: null });
-      const secondaryResults = await Promise.all([performancePromise, slotsPromise]).catch((error: unknown) => {
-        if (controller.signal.aborted || hasAbortName(error)) return null;
-        throw error;
-      });
-
-      if (!secondaryResults || controller.signal.aborted || sequence !== loadSequence.current) return;
-      const [performanceResult, slotsResult] = secondaryResults;
-      console.debug("ItemDrawer secondary queries", { itemId, ms: Math.round(globalThis.performance.now() - detailStartedAt) });
-
-      setDetails((current) => current?.item.id === itemResult.data.id ? {
-        ...current,
-        performance: performanceResult.error ? null : performanceResult.data,
-        openSlots: slotsResult.error ? [] : slotsResult.data ?? [],
-      } : current);
     }
 
-    void load().catch((error: unknown) => {
-      if (controller.signal.aborted || sequence !== loadSequence.current || hasAbortName(error)) return;
-      console.error("ItemDrawer load failed", error);
-      setMessage(extractMessage(error));
-    });
+    void load();
 
     return () => {
       controller.abort();
     };
-  }, [itemId, supabase]);
+  }, [itemId, retryNonce]);
 
   useEffect(() => {
-    if (!item || !editable || item.is_archived) return;
+    if (!item || !editable || item.is_archived || !hasUserEditedFields.current) return;
     const handle = window.setTimeout(() => {
       void saveFields(false);
     }, 1800);
     return () => window.clearTimeout(handle);
   }, [editable?.title, editable?.track_id, editable?.idea_type_id, editable?.caption, editable?.notes, editable?.production_file_url]);
 
+  function updateEditable(patch: Partial<EditableState>) {
+    hasUserEditedFields.current = true;
+    setEditable((current) => current ? { ...current, ...patch } : current);
+  }
+
   async function reloadAndNotify() {
     if (!itemId) return;
     const { data } = await supabase.from("items").select("*").eq("id", itemId).single();
     if (data) {
+      hasUserEditedFields.current = false;
       setDetails((current) => current ? { ...current, item: data } : current);
-      setEditable((current) => current ? { ...current, ...buildEditable(data, details?.partners ?? []) } : current);
+      setEditable((current) => current ? buildEditable(data, details?.partners ?? []) : current);
     }
     onChanged?.();
   }
@@ -269,6 +252,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setMessage(parseRuleMessage(extractMessage(error)));
       return;
     }
+    hasUserEditedFields.current = false;
     if (showMessage) setMessage("تم حفظ التعديلات.");
     onChanged?.();
   }
@@ -367,12 +351,19 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
 
   const drawerDetails = details;
   const performanceData = drawerDetails?.performance ?? null;
+  const showDetailsLoading = loadState === "loading";
+  const retryButton = loadState === "error" ? <button className="button button-secondary" type="button" onClick={() => setRetryNonce((current) => current + 1)}>إعادة المحاولة</button> : null;
 
   return (
     <div className="veil" onClick={onClose}>
       <aside className="drawer" onClick={(event) => event.stopPropagation()} aria-label="بطاقة المادة">
         <button className="icon-button drawer-close" type="button" onClick={onClose} aria-label="إغلاق">×</button>
-        {!displayItem ? <p>جارٍ التحميل...</p> : (
+        {!displayItem ? (
+          <div className="drawer-stack">
+            {showDetailsLoading ? <p>جارٍ التحميل...</p> : null}
+            {loadError ? <div className="notice stack" role="alert"><p>{loadError}</p>{retryButton}</div> : null}
+          </div>
+        ) : (
           <div className="drawer-stack">
             <header className="drawer-head">
               <span className="num ref-pill">{displayItem.ref}</span>
@@ -385,12 +376,13 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
             </header>
 
             {message ? <p className="notice">{message}</p> : null}
-            {!isDetailsReady ? <p className="muted">جارٍ تحميل التفاصيل والإجراءات...</p> : null}
+            {showDetailsLoading ? <p className="muted">جارٍ تحميل التفاصيل والإجراءات...</p> : null}
+            {loadError ? <div className="notice stack" role="alert"><p>{loadError}</p>{retryButton}</div> : null}
 
             {drawerDetails ? (
               <section className="meta-grid">
                 <div><span className="meta-label">الشركاء</span><div className="pill-row">{drawerDetails.partners.length ? drawerDetails.partners.map((row) => <span className="pill" key={row.partner_id}>{partnerName(row.partners)}</span>) : <span>—</span>}</div></div>
-                <div><span className="meta-label">الفريق</span><div className="pill-row">{drawerDetails.participants.map((row) => <span className="pill" key={`${row.user_id}-${row.part}`}>{profileName(row.profiles)} · {row.part === "writer" ? "كاتب" : row.part === "producer" ? "منتج" : "مراجع"}</span>)}</div></div>
+                <div><span className="meta-label">الفريق</span><div className="pill-row">{drawerDetails.participants.length ? drawerDetails.participants.map((row) => <span className="pill" key={`${row.user_id}-${row.part}`}>{profileName(row.profiles)} · {row.part === "writer" ? "كاتب" : row.part === "producer" ? "منتج" : "مراجع"}</span>) : <span>—</span>}</div></div>
               </section>
             ) : null}
 
@@ -407,22 +399,22 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
             {item && editable && canEdit(item) ? (
               <section className="drawer-section stack">
                 <h3>الحقول</h3>
-                <label className="field">العنوان<input className="input" value={editable.title} onChange={(event) => setEditable({ ...editable, title: event.target.value })} /></label>
+                <label className="field">العنوان<input className="input" value={editable.title} onChange={(event) => updateEditable({ title: event.target.value })} /></label>
                 <div className="form-grid">
-                  <label className="field">المسار<select className="input" value={editable.track_id} onChange={(event) => setEditable({ ...editable, track_id: event.target.value })}><option value="">—</option>{tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label>
-                  <label className="field">نوع الفكرة<select className="input" value={editable.idea_type_id} onChange={(event) => setEditable({ ...editable, idea_type_id: event.target.value })}><option value="">—</option>{ideaTypes.map((ideaType) => <option key={ideaType.id} value={ideaType.id}>{ideaType.name}</option>)}</select></label>
+                  <label className="field">المسار<select className="input" value={editable.track_id} onChange={(event) => updateEditable({ track_id: event.target.value })}><option value="">—</option>{tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label>
+                  <label className="field">نوع الفكرة<select className="input" value={editable.idea_type_id} onChange={(event) => updateEditable({ idea_type_id: event.target.value })}><option value="">—</option>{ideaTypes.map((ideaType) => <option key={ideaType.id} value={ideaType.id}>{ideaType.name}</option>)}</select></label>
                 </div>
                 {hasApprovalHistory ? <p className="soft-banner">هذا النص معتمَد — تعديله لا يُلغي الاعتماد تلقائياً. أبلغ المراجع إن كان التغيير جوهرياً.</p> : null}
-                <label className="field">الكابشن<textarea className={`input textarea ${largeCaption ? "textarea-large" : ""}`} value={editable.caption} onChange={(event) => setEditable({ ...editable, caption: event.target.value })} /></label>
-                <label className="field">الملاحظات<textarea className="input textarea" value={editable.notes} onChange={(event) => setEditable({ ...editable, notes: event.target.value })} /></label>
-                <label className="field">رابط ملف الإنتاج<input className="input" value={editable.production_file_url} onChange={(event) => setEditable({ ...editable, production_file_url: event.target.value })} /></label>
+                <label className="field">الكابشن<textarea className={`input textarea ${largeCaption ? "textarea-large" : ""}`} value={editable.caption} onChange={(event) => updateEditable({ caption: event.target.value })} /></label>
+                <label className="field">الملاحظات<textarea className="input textarea" value={editable.notes} onChange={(event) => updateEditable({ notes: event.target.value })} /></label>
+                <label className="field">رابط ملف الإنتاج<input className="input" value={editable.production_file_url} onChange={(event) => updateEditable({ production_file_url: event.target.value })} /></label>
                 <button className="button" type="button" onClick={() => runAction(() => saveFields(true))}>حفظ التعديلات</button>
                 <fieldset>
                   <legend>الشركاء</legend>
                   <div className="checks">
-                    {partners.map((partner) => <label key={partner.id}><input type="checkbox" checked={editable.partnerIds.includes(partner.id.toString())} onChange={(event) => setEditable({ ...editable, partnerIds: event.target.checked ? [...editable.partnerIds, partner.id.toString()] : editable.partnerIds.filter((id) => id !== partner.id.toString()) })} /> {partner.name}</label>)}
+                    {partners.map((partner) => <label key={partner.id}><input type="checkbox" checked={editable.partnerIds.includes(partner.id.toString())} onChange={(event) => updateEditable({ partnerIds: event.target.checked ? [...editable.partnerIds, partner.id.toString()] : editable.partnerIds.filter((id) => id !== partner.id.toString()) })} /> {partner.name}</label>)}
                   </div>
-                  <label className="field">شريك جديد<input className="input" value={editable.newPartner} onChange={(event) => setEditable({ ...editable, newPartner: event.target.value })} /></label>
+                  <label className="field">شريك جديد<input className="input" value={editable.newPartner} onChange={(event) => updateEditable({ newPartner: event.target.value })} /></label>
                   <button className="button button-secondary" type="button" onClick={() => runAction(savePartners)}>حفظ الشركاء</button>
                 </fieldset>
               </section>
