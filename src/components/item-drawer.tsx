@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties
 import { useReferenceData } from "@/components/reference-data-provider";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types";
-import type { DrawerPreview, IdeaTypeOption, ItemStatus, PartnerOption, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
+import type { DrawerPreview, IdeaTypeOption, ItemStatus, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
 import { extractMessage, formatHebronDateTime, formatNumber, formatPercent, isAdminRole, isReviewerRole, parseRuleMessage, statusLabels } from "@/lib/ui-data";
 
 type ItemRow = Tables<"items">;
@@ -151,6 +151,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         setMessage(null);
         return;
       }
+
       setMessage(null);
       setDetails(null);
       setEditable(null);
@@ -158,7 +159,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setOverrideReason("");
       setRejectNote("");
 
-      const startedAt = performance.now();
+      const startedAt = globalThis.performance.now();
       const baseResults = await Promise.all([
         supabase.from("items").select("*").eq("id", itemId).single().abortSignal(controller.signal),
         supabase.from("item_participants").select("user_id, part, profiles(display_name)").eq("item_id", itemId).abortSignal(controller.signal),
@@ -168,13 +169,16 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         if (controller.signal.aborted || hasAbortName(error)) return null;
         throw error;
       });
+
       if (!baseResults || controller.signal.aborted || sequence !== loadSequence.current) return;
       const [itemResult, participantsResult, partnersResult, approvalsResult] = baseResults;
-      console.debug("ItemDrawer basic queries", { itemId, ms: Math.round(performance.now() - startedAt) });
+      console.debug("ItemDrawer basic queries", { itemId, ms: Math.round(globalThis.performance.now() - startedAt) });
+
       if (itemResult.error) {
         setMessage(extractMessage(itemResult.error));
         return;
       }
+
       const relationError = participantsResult.error ?? partnersResult.error ?? approvalsResult.error;
       if (relationError) {
         console.error("ItemDrawer relation query failed", relationError);
@@ -190,6 +194,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         performance: null,
         openSlots: [],
       };
+
       setDetails(baseDetails);
       setEditable(buildEditable(baseDetails.item, baseDetails.partners));
 
@@ -197,7 +202,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       const shouldLoadOpenSlots = itemResult.data.status !== "published" && !itemResult.data.slot_id;
       if (!shouldLoadPerformance && !shouldLoadOpenSlots) return;
 
-      const detailStartedAt = performance.now();
+      const detailStartedAt = globalThis.performance.now();
       const performancePromise = shouldLoadPerformance
         ? supabase.from("v_item_performance").select("*").eq("id", itemId).maybeSingle().abortSignal(controller.signal)
         : Promise.resolve<QueryFallback<PerformanceRow | null>>({ data: null, error: null });
@@ -208,9 +213,10 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         if (controller.signal.aborted || hasAbortName(error)) return null;
         throw error;
       });
+
       if (!secondaryResults || controller.signal.aborted || sequence !== loadSequence.current) return;
       const [performanceResult, slotsResult] = secondaryResults;
-      console.debug("ItemDrawer secondary queries", { itemId, ms: Math.round(performance.now() - detailStartedAt) });
+      console.debug("ItemDrawer secondary queries", { itemId, ms: Math.round(globalThis.performance.now() - detailStartedAt) });
 
       setDetails((current) => current?.item.id === itemResult.data.id ? {
         ...current,
@@ -224,6 +230,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       console.error("ItemDrawer load failed", error);
       setMessage(extractMessage(error));
     });
+
     return () => {
       controller.abort();
     };
@@ -283,12 +290,14 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         selectedIds = [...selectedIds, data.id];
       }
     }
+
     const uniqueIds = Array.from(new Set(selectedIds));
     const { error: deleteError } = await supabase.from("item_partners").delete().eq("item_id", item.id);
     if (deleteError) {
       setMessage(extractMessage(deleteError));
       return;
     }
+
     if (uniqueIds.length > 0) {
       const rows: TablesInsert<"item_partners">[] = uniqueIds.map((partner_id) => ({ item_id: item.id, partner_id }));
       const { error: insertError } = await supabase.from("item_partners").insert(rows);
@@ -297,6 +306,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         return;
       }
     }
+
     setMessage("تم حفظ الشركاء.");
     onChanged?.();
   }
@@ -354,8 +364,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   if (!itemId) return null;
+
   const drawerDetails = details;
-  const performance = drawerDetails?.performance ?? null;
+  const performanceData = drawerDetails?.performance ?? null;
 
   return (
     <div className="veil" onClick={onClose}>
@@ -428,15 +439,15 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               </div>
             </section>
 
-            {item?.status === "published" && performance ? (
+            {item?.status === "published" && performanceData ? (
               <section className="drawer-section stack">
                 <h3>الأداء</h3>
-                {performance.signal_partial ? <p className="soft-banner">قياس ناقص</p> : null}
+                {performanceData.signal_partial ? <p className="soft-banner">قياس ناقص</p> : null}
                 <div className="metric-grid">
-                  <span>الوصول <b className="num">{formatNumber(performance.reach)}</b></span>
-                  <span>الحفظ <b className="num">{formatPercent(performance.save_rate)}</b></span>
-                  <span>المشاركة <b className="num">{formatPercent(performance.share_rate)}</b></span>
-                  <span>المتابعة <b className="num">{formatPercent(performance.follow_rate)}</b></span>
+                  <span>الوصول <b className="num">{formatNumber(performanceData.reach)}</b></span>
+                  <span>الحفظ <b className="num">{formatPercent(performanceData.save_rate)}</b></span>
+                  <span>المشاركة <b className="num">{formatPercent(performanceData.share_rate)}</b></span>
+                  <span>المتابعة <b className="num">{formatPercent(performanceData.follow_rate)}</b></span>
                 </div>
               </section>
             ) : null}
