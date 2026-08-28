@@ -148,7 +148,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const supabase = useMemo(() => createClient(), []);
   const loadSequence = useRef(0);
   const hasUserEditedFields = useRef(false);
-  const autoSaveTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const queuedSaveRef = useRef<{ showMessage: boolean; notifyList: boolean } | null>(null);
   const latestEditableRef = useRef<EditableState | null>(null);
