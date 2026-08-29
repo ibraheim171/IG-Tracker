@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 
 const navigationItems = [
   { href: "/", label: "خطة النشر", icon: "calendar" },
@@ -46,6 +46,10 @@ export function AppNavigation() {
   const pathname = usePathname();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
+  useEffect(() => {
+    setPendingHref(null);
+  }, [pathname]);
+
   function markPending(event: MouseEvent<HTMLAnchorElement>, href: string) {
     if (
       event.defaultPrevented ||
@@ -61,17 +65,21 @@ export function AppNavigation() {
     setPendingHref(href);
   }
 
+  const visualPathname = pendingHref ?? pathname;
+
   return (
     <nav className="nav-links" aria-label="التنقل الرئيسي">
       {navigationItems.map((item) => {
-        const isActive = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-        const isPending = pendingHref === item.href && !isActive;
+        const isCurrent = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+        const isVisuallyActive = item.href === "/" ? visualPathname === "/" : visualPathname.startsWith(item.href);
+        const isPending = pendingHref === item.href && !isCurrent;
         return (
           <Link
-            className={`nav-link${isActive ? " is-active" : ""}${isPending ? " is-pending" : ""}`}
+            className={`nav-link${isVisuallyActive ? " is-active" : ""}${isPending ? " is-pending" : ""}`}
             href={item.href}
             key={item.href}
-            aria-current={isActive ? "page" : undefined}
+            prefetch={true}
+            aria-current={isCurrent ? "page" : undefined}
             aria-busy={isPending || undefined}
             onClick={(event) => markPending(event, item.href)}
           >
@@ -80,7 +88,6 @@ export function AppNavigation() {
           </Link>
         );
       })}
-      {pendingHref && pendingHref !== pathname ? <span className="nav-progress" aria-hidden="true" /> : null}
     </nav>
   );
 }
