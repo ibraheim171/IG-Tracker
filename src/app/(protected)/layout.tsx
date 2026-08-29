@@ -10,7 +10,7 @@ export default async function ProtectedLayout({ children }: Readonly<{ children:
   return (
     <ReferenceDataProvider data={referenceData}>
       <div className="app-shell">
-        <Header displayName={profile.display_name} />
+        <Header displayName={profile.display_name} roles={profile.roles} />
         <div className="app-content">{children}</div>
       </div>
     </ReferenceDataProvider>
