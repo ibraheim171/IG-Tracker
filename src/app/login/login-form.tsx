@@ -77,7 +77,6 @@ export function LoginForm() {
       }
 
       router.replace("/");
-      router.refresh();
     } catch (signInError) {
       setError(loginErrorMessage(signInError));
     } finally {
