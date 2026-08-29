@@ -34,7 +34,7 @@ button { cursor: pointer; }
   font-variant-numeric: tabular-nums lining-nums;
 }
 
-.app-shell { min-block-size: 100dvh; padding-block-end: 5.75rem; }
+.app-shell { min-block-size: 100dvh; padding-block-end: calc(5.75rem + env(safe-area-inset-bottom)); }
 .app-content { min-inline-size: 0; }
 .page { inline-size: min(100%, 48rem); margin-inline: auto; padding: 1.25rem; }
 .wide-page { inline-size: min(100%, 64rem); }
@@ -63,7 +63,7 @@ button { cursor: pointer; }
   background: color-mix(in srgb, var(--card) 94%, transparent);
   border-block-end: 1px solid var(--rule);
   box-shadow: 0 0.35rem 1.25rem color-mix(in srgb, var(--ink) 7%, transparent);
-  backdrop-filter: blur(0.75rem);
+  backdrop-filter: none;
 }
 
 .brand-row { display: flex; align-items: center; gap: 0.65rem; min-inline-size: 0; }
@@ -230,6 +230,7 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
     border-block-end: 0;
     border-inline-end: 1px solid var(--rule);
     box-shadow: -0.35rem 0 1.5rem color-mix(in srgb, var(--ink) 7%, transparent);
+    backdrop-filter: blur(0.75rem);
   }
   .brand-copy small { display: block; margin-block-start: 0.2rem; }
   .nav-links {
