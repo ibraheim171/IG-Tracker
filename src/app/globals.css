@@ -230,6 +230,7 @@ textarea:focus-visible {
   font-weight: 700;
   text-align: center;
   text-decoration: none;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }
 .nav-link.is-active {
   background: color-mix(in srgb, var(--accent-soft) 45%, var(--card));
@@ -239,17 +240,6 @@ textarea:focus-visible {
 .nav-link.is-pending { color: var(--accent); }
 .nav-icon { display: grid; place-items: center; inline-size: 1.45rem; block-size: 1.45rem; }
 .nav-icon svg { inline-size: 100%; block-size: 100%; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
-.nav-progress {
-  position: fixed;
-  inset-block-start: 0;
-  inset-inline-start: 0;
-  z-index: 80;
-  block-size: 0.2rem;
-  inline-size: 42%;
-  background: var(--accent);
-  box-shadow: 0 0 0.7rem color-mix(in srgb, var(--accent) 50%, transparent);
-  animation: nav-progress 1s ease-in-out infinite alternate;
-}
 
 .table-wrap { overflow-inline: auto; }
 table { inline-size: 100%; border-collapse: collapse; }
@@ -293,7 +283,11 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .step.is-current { border-color: var(--accent); font-weight: 800; }
 .override-box { display: grid; gap: 0.75rem; border: 1px solid var(--accent); border-radius: 0.5rem; padding: 0.75rem; }
 
-.route-loading { min-block-size: 60dvh; }
+.route-loading {
+  min-block-size: 60dvh;
+  opacity: 0;
+  animation: route-loading-reveal 120ms ease 190ms forwards;
+}
 .loading-heading, .loading-list { display: grid; gap: 0.75rem; }
 .loading-label { color: var(--accent); font-weight: 700; }
 .skeleton {
@@ -308,9 +302,9 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .skeleton-rule { inline-size: 45%; block-size: 1.5rem; }
 .skeleton-card { inline-size: 100%; block-size: 7.5rem; border: 1px solid var(--rule); }
 
-@keyframes nav-progress {
-  from { transform: translateX(0); }
-  to { transform: translateX(-140%); }
+@keyframes route-loading-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes skeleton-shimmer {
@@ -377,5 +371,6 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nav-progress, .skeleton { animation: none; }
+  .nav-link, .route-loading, .skeleton { animation: none; transition: none; }
+  .route-loading { opacity: 1; }
 }
