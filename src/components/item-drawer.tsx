@@ -70,6 +70,10 @@ const order: ItemStatus[] = ["idea", "writing", "content_approved", "in_producti
 const detailTimeoutMs = 10000;
 const autoSaveDelayMs = 1800;
 const itemFieldKeys: (keyof EditableState)[] = ["title", "track_id", "idea_type_id", "caption", "notes", "production_file_url"];
+const itemSaveErrorMessage = "تعذر حفظ التعديلات. حاول مجددًا. رمز التشخيص: ITEM_SAVE.";
+const partnerCreateErrorMessage = "تعذر إضافة الشريك. حاول مجددًا. رمز التشخيص: PARTNER_CREATE.";
+const partnersClearErrorMessage = "تعذر تحديث الشركاء. حاول مجددًا. رمز التشخيص: PARTNERS_CLEAR.";
+const partnersSaveErrorMessage = "تعذر حفظ الشركاء. حاول مجددًا. رمز التشخيص: PARTNERS_SAVE.";
 
 function profileName(value: ParticipantRecord["profiles"]) {
   if (Array.isArray(value)) return value[0]?.display_name ?? "—";
@@ -339,7 +343,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         if (error) {
           didSucceed = false;
           if (latestItemRef.current?.id === itemIdAtSave) {
-            setMessage(parseRuleMessage(extractMessage(error)));
+            setMessage(itemSaveErrorMessage);
           }
           break;
         }
@@ -459,7 +463,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       } else if (window.confirm("لا يوجد شريك بهذا الاسم، أضِفه؟")) {
         const { data, error } = await supabase.from("partners").insert({ name: typed, aliases: [typed] }).select("id, name").single();
         if (error) {
-          setMessage(extractMessage(error));
+          setMessage(partnerCreateErrorMessage);
           return;
         }
         selectedIds = [...selectedIds, data.id];
@@ -470,7 +474,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     const uniqueIds = Array.from(new Set(selectedIds));
     const { error: deleteError } = await supabase.from("item_partners").delete().eq("item_id", item.id);
     if (deleteError) {
-      setMessage(extractMessage(deleteError));
+      setMessage(partnersClearErrorMessage);
       return;
     }
 
@@ -478,7 +482,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       const rows: TablesInsert<"item_partners">[] = uniqueIds.map((partner_id) => ({ item_id: item.id, partner_id }));
       const { error: insertError } = await supabase.from("item_partners").insert(rows);
       if (insertError) {
-        setMessage(extractMessage(insertError));
+        setMessage(partnersSaveErrorMessage);
         return;
       }
     }
