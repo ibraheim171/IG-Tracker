@@ -31,9 +31,9 @@ export async function GET(request: NextRequest) {
   }
 
   const [tracksResult, ideaTypesResult, partnersResult] = await Promise.all([
-    supabase.from("tracks").select("id, name, color_hex").order("name", { ascending: true }),
-    supabase.from("idea_types").select("id, name").order("name", { ascending: true }),
-    supabase.from("partners").select("id, name").order("name", { ascending: true }),
+    supabase.from("tracks").select("id, name, color_hex").order("sort_order", { ascending: true }),
+    supabase.from("idea_types").select("id, name").eq("active", true).order("id", { ascending: true }),
+    supabase.from("partners").select("id, name").eq("active", true).order("name", { ascending: true }),
   ]);
 
   if (tracksResult.error || ideaTypesResult.error || partnersResult.error) {
