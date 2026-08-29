@@ -48,6 +48,12 @@ type EditableState = {
   newPartner: string;
 };
 
+type ConfirmDialog = {
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+};
+
 type Props = {
   itemId: string | null;
   initialItem?: DrawerPreview | null;
@@ -162,6 +168,10 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const latestItemRef = useRef<ItemRow | null>(null);
   const lastSavedSignatureRef = useRef<string | null>(null);
   const needsListRefreshRef = useRef(false);
+  const actionInFlightRef = useRef(false);
+  const confirmDialogRef = useRef<HTMLElement | null>(null);
+  const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
+  const confirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
   const [editable, setEditable] = useState<EditableState | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
@@ -171,6 +181,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const [overrideReason, setOverrideReason] = useState("");
   const [failedAdvance, setFailedAdvance] = useState<ItemStatus | null>(null);
   const [rejectNote, setRejectNote] = useState("");
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const preview = initialItem?.id === itemId ? initialItem : null;
@@ -203,7 +215,30 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   useEffect(() => () => {
     clearAutoSaveTimer();
     queuedSaveRef.current = null;
+    confirmResolverRef.current?.(false);
+    confirmResolverRef.current = null;
   }, []);
+
+  useEffect(() => {
+    if (!confirmDialog) return;
+
+    const focusId = window.setTimeout(() => {
+      confirmDialogRef.current?.focus();
+    }, 0);
+
+    function handleConfirmKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        settleConfirmation(false);
+      }
+    }
+
+    document.addEventListener("keydown", handleConfirmKeydown);
+    return () => {
+      window.clearTimeout(focusId);
+      document.removeEventListener("keydown", handleConfirmKeydown);
+    };
+  }, [confirmDialog]);
 
   useEffect(() => {
     const sequence = ++loadSequence.current;
@@ -295,6 +330,26 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       window.clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
+  }
+
+  function requestConfirmation(dialog: ConfirmDialog) {
+    if (confirmResolverRef.current) return Promise.resolve(false);
+    confirmReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setConfirmDialog(dialog);
+    return new Promise<boolean>((resolve) => {
+      confirmResolverRef.current = resolve;
+    });
+  }
+
+  function settleConfirmation(result: boolean) {
+    const resolve = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    setConfirmDialog(null);
+    resolve?.(result);
+    window.setTimeout(() => {
+      confirmReturnFocusRef.current?.focus();
+      confirmReturnFocusRef.current = null;
+    }, 0);
   }
 
   function scheduleAutoSave() {
@@ -460,7 +515,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       const existing = partners.find((partner) => partner.name === typed);
       if (existing) {
         selectedIds = [...selectedIds, existing.id];
-      } else if (window.confirm("لا يوجد شريك بهذا الاسم، أضِفه؟")) {
+      } else if (await requestConfirmation({ message: "لا يوجد شريك بهذا الاسم، أضِفه؟", confirmLabel: "أضف الشريك", cancelLabel: "إلغاء" })) {
         const { data, error } = await supabase.from("partners").insert({ name: typed, aliases: [typed] }).select("id, name").single();
         if (error) {
           setMessage(partnerCreateErrorMessage);
@@ -496,8 +551,14 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   function runAction(action: () => Promise<unknown>) {
+    if (actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    setActionBusy(true);
     startTransition(() => {
-      void action();
+      void Promise.resolve(action()).finally(() => {
+        actionInFlightRef.current = false;
+        setActionBusy(false);
+      });
     });
   }
 
@@ -553,6 +614,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const performanceData = drawerDetails?.performance ?? null;
   const showDetailsLoading = loadState === "loading";
   const retryButton = loadState === "error" ? <button className="button button-secondary" type="button" onClick={() => setRetryNonce((current) => current + 1)}>إعادة المحاولة</button> : null;
+  const actionDisabled = isPending || actionBusy;
 
   return (
     <div className="veil" onClick={handleClose}>
@@ -575,7 +637,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               </div>
             </header>
 
-            {message ? <p className="notice">{message}</p> : null}
+            {message && !(isAdmin && failedAdvance) ? <p className="notice">{message}</p> : null}
             {showDetailsLoading ? <p className="muted">جارٍ تحميل التفاصيل والإجراءات...</p> : null}
             {loadError ? <div className="notice stack" role="alert"><p>{loadError}</p>{retryButton}</div> : null}
 
@@ -608,14 +670,16 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 <label className="field">الكابشن<textarea className={`input textarea ${largeCaption ? "textarea-large" : ""}`} value={editable.caption} onChange={(event) => updateEditable({ caption: event.target.value })} /></label>
                 <label className="field">الملاحظات<textarea className="input textarea" value={editable.notes} onChange={(event) => updateEditable({ notes: event.target.value })} /></label>
                 <label className="field">رابط ملف الإنتاج<input className="input" value={editable.production_file_url} onChange={(event) => updateEditable({ production_file_url: event.target.value })} /></label>
-                <button className="button" type="button" onClick={() => runAction(() => saveFields(true))}>حفظ التعديلات</button>
+                <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => saveFields(true))}>حفظ التعديلات</button>
                 <fieldset>
                   <legend>الشركاء</legend>
                   <div className="checks">
                     {partners.map((partner) => <label key={partner.id}><input type="checkbox" checked={editable.partnerIds.includes(partner.id.toString())} onChange={(event) => updateEditable({ partnerIds: event.target.checked ? [...editable.partnerIds, partner.id.toString()] : editable.partnerIds.filter((id) => id !== partner.id.toString()) })} /> {partner.name}</label>)}
                   </div>
-                  <label className="field">شريك جديد<input className="input" value={editable.newPartner} onChange={(event) => updateEditable({ newPartner: event.target.value })} /></label>
-                  <button className="button button-secondary" type="button" onClick={() => runAction(savePartners)}>حفظ الشركاء</button>
+                  <div className="stack">
+                    <label className="field">شريك جديد<input className="input" value={editable.newPartner} onChange={(event) => updateEditable({ newPartner: event.target.value })} /></label>
+                    <button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => runAction(savePartners)}>حفظ الشركاء</button>
+                  </div>
                 </fieldset>
               </section>
             ) : null}
@@ -647,31 +711,33 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
             {item && editable && !item.is_archived ? (
               <section className="drawer-section stack">
                 <h3>الإجراءات</h3>
-                {item.status === "idea" && isWriter ? <button className="button" type="button" disabled={isPending} onClick={() => window.confirm("متأكد أنك جاهز للتسليم؟") && runAction(() => advance("writing"))}>تسليم</button> : null}
+                {item.status === "idea" && isWriter ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(async () => { if (await requestConfirmation({ message: "متأكد أنك جاهز للتسليم؟", confirmLabel: "تسليم", cancelLabel: "إلغاء" })) await advance("writing"); })}>تسليم</button> : null}
                 {item.status === "writing" && isReviewer ? (
                   <>
-                    <button className="button" type="button" disabled={isPending} onClick={() => runAction(() => advance("content_approved"))}>اعتماد</button>
+                    <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("content_approved"))}>اعتماد</button>
                     <label className="field">ملاحظة الإعادة<textarea className="input textarea" placeholder="هذه الملاحظة هي ما سيراه الكاتب." value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} /></label>
-                    <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || isPending} onClick={() => runAction(() => reject("content"))}>إعادة بملاحظة</button>
+                    <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || actionDisabled} onClick={() => runAction(() => reject("content"))}>إعادة بملاحظة</button>
                   </>
                 ) : item.status === "writing" ? <p className="muted">بانتظار مراجع.</p> : null}
-                {item.status === "content_approved" && (isParticipant || isAdmin) ? hasProducer ? <button className="button" type="button" disabled={isPending} onClick={() => runAction(() => advance("in_production"))}>ابدأ الإنتاج</button> : <p className="muted">بانتظار تعيين منتج.</p> : null}
+                {item.status === "content_approved" && (isParticipant || isAdmin) ? hasProducer ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("in_production"))}>ابدأ الإنتاج</button> : <p className="muted">بانتظار تعيين منتج.</p> : null}
                 {item.status === "in_production" && isReviewer ? (
                   <>
-                    <button className="button" type="button" disabled={isPending} onClick={() => runAction(() => advance("design_approved"))}>اعتماد التصميم</button>
+                    <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("design_approved"))}>اعتماد التصميم</button>
                     <label className="field">ملاحظة الإعادة<textarea className="input textarea" placeholder="هذه الملاحظة هي ما سيراه المنتج." value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} /></label>
-                    <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || isPending} onClick={() => runAction(() => reject("design"))}>إعادة بملاحظة</button>
+                    <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || actionDisabled} onClick={() => runAction(() => reject("design"))}>إعادة بملاحظة</button>
                   </>
                 ) : item.status === "in_production" ? <p className="muted">{isProducer ? "بانتظار مراجع." : "بانتظار الإنتاج والمراجعة."}</p> : null}
-                {item.status === "design_approved" && (isParticipant || isAdmin) ? <button className="button" type="button" disabled={isPending} onClick={() => runAction(() => advance("ready"))}>انتقل إلى جاهز للنشر</button> : null}
+                {item.status === "design_approved" && (isParticipant || isAdmin) ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("ready"))}>انتقل إلى جاهز للنشر</button> : null}
                 {item.status === "ready" ? <p className="muted">تظهر هذه المادة في شاشة جاهز للنشر.</p> : null}
                 {!item.slot_id && item.status !== "published" ? (
-                  <label className="field">موعد النشر<select className="input" defaultValue="" onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails?.openSlots.map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
+                  <label className="field">موعد النشر<select className="input" defaultValue="" disabled={actionDisabled} onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails?.openSlots.map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
                 ) : null}
                 {isAdmin && failedAdvance ? (
                   <div className="override-box">
+                    <p className="eyebrow">تجاوز إداري</p>
+                    {message ? <div className="notice stack" role="alert"><span>سبب المنع</span><span>{message}</span></div> : null}
                     <label className="field">سبب التجاوز<input className="input" value={overrideReason} onChange={(event) => setOverrideReason(event.target.value)} /></label>
-                    <button className="button" type="button" disabled={!overrideReason.trim() || isPending} onClick={() => runAction(() => advance(failedAdvance, overrideReason.trim()))}>تجاوز ونفّذ</button>
+                    <button className="button" type="button" disabled={!overrideReason.trim() || actionDisabled} onClick={() => runAction(() => advance(failedAdvance, overrideReason.trim()))}>تجاوز ونفّذ</button>
                   </div>
                 ) : null}
               </section>
@@ -680,6 +746,27 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
             <p className="muted">الحالة الحالية: {statusLabels[displayItem.status]}</p>
           </div>
         )}
+        {confirmDialog ? (
+          <div className="veil" onClick={(event) => { event.stopPropagation(); settleConfirmation(false); }}>
+            <section
+              aria-describedby="item-drawer-confirm-description"
+              aria-labelledby="item-drawer-confirm-title"
+              aria-modal="true"
+              className="confirm-panel stack"
+              onClick={(event) => event.stopPropagation()}
+              ref={confirmDialogRef}
+              role="dialog"
+              tabIndex={-1}
+            >
+              <h2 id="item-drawer-confirm-title">تأكيد الإجراء</h2>
+              <p id="item-drawer-confirm-description">{confirmDialog.message}</p>
+              <div className="actions-row">
+                <button className="button" type="button" onClick={() => settleConfirmation(true)}>{confirmDialog.confirmLabel}</button>
+                <button className="button button-secondary" type="button" onClick={() => settleConfirmation(false)}>{confirmDialog.cancelLabel}</button>
+              </div>
+            </section>
+          </div>
+        ) : null}
       </aside>
     </div>
   );
