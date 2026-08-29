@@ -1,7 +1,10 @@
+import { AccountMenu } from "@/components/account-menu";
 import { AppNavigation } from "@/components/app-navigation";
-import { LogoutButton } from "@/components/logout-button";
+import type { Enums } from "@/lib/database.types";
 
-export function Header({ displayName }: { displayName: string }) {
+type RoleName = Enums<"role_name">;
+
+export function Header({ displayName, roles }: { displayName: string; roles: RoleName[] }) {
   return (
     <header className="app-header">
       <div className="brand-row">
@@ -12,10 +15,7 @@ export function Header({ displayName }: { displayName: string }) {
         </span>
       </div>
       <AppNavigation />
-      <div className="account-panel">
-        <span className="account-name">{displayName}</span>
-        <LogoutButton />
-      </div>
+      <AccountMenu displayName={displayName} roles={roles} />
     </header>
   );
 }
