@@ -35,6 +35,7 @@ type DrawerDetails = {
 
 type ItemDetailsResponse = { details: DrawerDetails } | { error: string };
 type LoadState = "idle" | "loading" | "ready" | "error";
+type SaveOptions = { showMessage: boolean; notifyList: boolean };
 
 type EditableState = {
   title: string;
@@ -150,7 +151,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const hasUserEditedFields = useRef(false);
   const autoSaveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
-  const queuedSaveRef = useRef<{ showMessage: boolean; notifyList: boolean } | null>(null);
+  const saveDrainPromiseRef = useRef<Promise<boolean> | null>(null);
+  const closeInFlightRef = useRef(false);
+  const queuedSaveRef = useRef<SaveOptions | null>(null);
   const latestEditableRef = useRef<EditableState | null>(null);
   const latestItemRef = useRef<ItemRow | null>(null);
   const lastSavedSignatureRef = useRef<string | null>(null);
@@ -205,6 +208,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
 
     async function load() {
       if (!itemId) {
+        closeInFlightRef.current = false;
         clearAutoSaveTimer();
         queuedSaveRef.current = null;
         latestItemRef.current = null;
@@ -220,6 +224,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         return;
       }
 
+      closeInFlightRef.current = false;
       hasUserEditedFields.current = false;
       clearAutoSaveTimer();
       queuedSaveRef.current = null;
@@ -294,7 +299,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     clearAutoSaveTimer();
     autoSaveTimerRef.current = window.setTimeout(() => {
       autoSaveTimerRef.current = null;
-      void saveFields(false);
+      void saveFields(false, false);
     }, autoSaveDelayMs);
   }
 
@@ -306,9 +311,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     };
   }
 
-  async function drainSaveQueue() {
-    if (saveInFlightRef.current) return;
+  async function runSaveQueue() {
     saveInFlightRef.current = true;
+    let didSucceed = true;
     try {
       while (queuedSaveRef.current) {
         const options = queuedSaveRef.current;
@@ -332,6 +337,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         const itemIdAtSave = currentItem.id;
         const { data, error } = await supabase.from("items").update(payload).eq("id", itemIdAtSave).select("*").single();
         if (error) {
+          didSucceed = false;
           if (latestItemRef.current?.id === itemIdAtSave) {
             setMessage(parseRuleMessage(extractMessage(error)));
           }
@@ -362,8 +368,17 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       }
     } finally {
       saveInFlightRef.current = false;
-      if (queuedSaveRef.current) void drainSaveQueue();
     }
+    return didSucceed;
+  }
+
+  async function drainSaveQueue() {
+    if (saveDrainPromiseRef.current) return saveDrainPromiseRef.current;
+    const promise = runSaveQueue().finally(() => {
+      saveDrainPromiseRef.current = null;
+    });
+    saveDrainPromiseRef.current = promise;
+    return promise;
   }
 
   function updateEditable(patch: Partial<EditableState>) {
@@ -395,23 +410,41 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     onChanged?.();
   }
 
-  async function saveFields(showMessage = true) {
+  async function saveFields(showMessage = true, notifyList = showMessage) {
     if (showMessage) clearAutoSaveTimer();
     const currentItem = latestItemRef.current;
     const currentEditable = latestEditableRef.current;
-    if (!currentItem || !currentEditable || currentItem.is_archived) return;
-    mergeQueuedSave(showMessage, showMessage);
-    await drainSaveQueue();
+    if (!currentItem || !currentEditable || currentItem.is_archived) return true;
+    mergeQueuedSave(showMessage, notifyList);
+    return drainSaveQueue();
   }
 
-  function handleClose() {
-    clearAutoSaveTimer();
-    queuedSaveRef.current = null;
-    if (needsListRefreshRef.current) {
-      needsListRefreshRef.current = false;
-      onChanged?.();
+  function hasUnsavedItemChanges() {
+    const currentItem = latestItemRef.current;
+    const currentEditable = latestEditableRef.current;
+    if (!currentItem || !currentEditable || currentItem.is_archived) return false;
+    return editableSignature(currentEditable) !== lastSavedSignatureRef.current;
+  }
+
+  async function handleClose() {
+    if (closeInFlightRef.current) return;
+    closeInFlightRef.current = true;
+    try {
+      clearAutoSaveTimer();
+      const hasPendingSave = Boolean(queuedSaveRef.current) || saveInFlightRef.current || Boolean(saveDrainPromiseRef.current);
+      if (hasUnsavedItemChanges() || hasPendingSave) {
+        mergeQueuedSave(false, true);
+        const saved = await drainSaveQueue();
+        if (!saved || hasUnsavedItemChanges()) return;
+      } else if (needsListRefreshRef.current) {
+        needsListRefreshRef.current = false;
+        onChanged?.();
+      }
+
+      onClose();
+    } finally {
+      closeInFlightRef.current = false;
     }
-    onClose();
   }
 
   async function savePartners() {
@@ -452,7 +485,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     onChanged?.();
   }
 
-  function runAction(action: () => Promise<void>) {
+  function runAction(action: () => Promise<unknown>) {
     startTransition(() => {
       void action();
     });
