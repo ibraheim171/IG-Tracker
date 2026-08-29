@@ -78,7 +78,7 @@ export function AppNavigation() {
             className={`nav-link${isVisuallyActive ? " is-active" : ""}${isPending ? " is-pending" : ""}`}
             href={item.href}
             key={item.href}
-            prefetch={true}
+            prefetch={!isCurrent}
             aria-current={isCurrent ? "page" : undefined}
             aria-busy={isPending || undefined}
             onClick={(event) => markPending(event, item.href)}
