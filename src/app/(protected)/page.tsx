@@ -16,16 +16,14 @@ type ItemWithLookups = {
 export default async function HomePage() {
   const [profile, supabase] = await Promise.all([getCurrentProfile(), createClient()]);
   const since = new Date(Date.now() - 4 * 86_400_000).toISOString();
-  const [{ data: slotsData }, { data: waitingRows }] = await Promise.all([
+  const [{ data: slotsData }, { data: waitingRows }, { data: itemRows }] = await Promise.all([
     supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items, n_ready").gte("slot_at", since).order("slot_at", { ascending: true }),
     supabase.from("v_waiting").select("id, waiting_on"),
+    supabase.from("items").select("id, ref, title, status, slot_id, track_id, idea_type_id").not("slot_id", "is", null),
   ]);
   const slots = (slotsData ?? []) as BoardSlot[];
-  const slotIds = slots.map((slot) => slot.slot_id).filter((id): id is string => Boolean(id));
-  const { data: itemRows } = slotIds.length
-    ? await supabase.from("items").select("id, ref, title, status, slot_id, track_id, idea_type_id").in("slot_id", slotIds)
-    : { data: [] };
-  const rawItems = (itemRows ?? []) as unknown as ItemWithLookups[];
+  const slotIds = new Set(slots.map((slot) => slot.slot_id).filter((id): id is string => Boolean(id)));
+  const rawItems = ((itemRows ?? []) as ItemWithLookups[]).filter((item) => item.slot_id && slotIds.has(item.slot_id));
   const waitingById = new Map((waitingRows ?? []).map((row) => [row.id, row.waiting_on]));
   const items: BoardItem[] = rawItems.map((item) => ({
     id: item.id,
