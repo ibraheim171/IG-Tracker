@@ -162,7 +162,11 @@ export function extractMessage(error: unknown) {
 export function parseRuleMessage(message: string) {
   const marker = "RULE_VIOLATION:";
   const index = message.indexOf(marker);
-  return index >= 0 ? message.slice(index + marker.length).trim() : message;
+  if (index >= 0) {
+    const ruleMessage = message.slice(index + marker.length).trim();
+    if (ruleMessage) return ruleMessage;
+  }
+  return "تعذر تنفيذ العملية. حاول مجددًا. رمز التشخيص: RPC_ERROR.";
 }
 
 export function isReviewerRole(roles: RoleName[]) {
