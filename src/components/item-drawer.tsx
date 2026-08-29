@@ -145,7 +145,7 @@ function hasAbortName(error: unknown) {
 }
 
 export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, largeCaption }: Props) {
-  const { tracks, ideaTypes, partners } = useReferenceData();
+  const { tracks, ideaTypes, partners, refreshReferenceData } = useReferenceData();
   const supabase = useMemo(() => createClient(), []);
   const loadSequence = useRef(0);
   const hasUserEditedFields = useRef(false);
@@ -450,6 +450,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   async function savePartners() {
     if (!item || !editable || item.is_archived) return;
     let selectedIds = editable.partnerIds.map(Number);
+    let addedPartner = false;
     const typed = editable.newPartner.trim();
     if (typed) {
       const existing = partners.find((partner) => partner.name === typed);
@@ -462,6 +463,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
           return;
         }
         selectedIds = [...selectedIds, data.id];
+        addedPartner = true;
       }
     }
 
@@ -479,6 +481,10 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         setMessage(extractMessage(insertError));
         return;
       }
+    }
+
+    if (addedPartner) {
+      await refreshReferenceData();
     }
 
     setMessage("تم حفظ الشركاء.");
