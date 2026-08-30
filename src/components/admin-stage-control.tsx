@@ -30,7 +30,7 @@ type AdminStageRpc = (
 ) => PromiseLike<{ data: ItemRow | null; error: { message?: string } | null }>;
 
 const adminStageOptions: { value: Exclude<ItemStatus, "published">; label: string }[] = [
-  { value: "idea", label: "كتابة الكابشن" },
+  { value: "idea", label: "الكتابة" },
   { value: "writing", label: "اعتماد المحتوى" },
   { value: "content_approved", label: "الإنتاج" },
   { value: "in_production", label: "اعتماد التصميم" },
@@ -51,17 +51,19 @@ function isPastSlot(slot: AdminStageCurrentSlot | null) {
 export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props) {
   const supabase = useMemo(() => createClient(), []);
   const dialogRef = useRef<HTMLElement | null>(null);
+  const stageDialogRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const stageReturnFocusRef = useRef<HTMLElement | null>(null);
   const actionInFlightRef = useRef(false);
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
   const [slotDecision, setSlotDecision] = useState<SlotDecision>("keep");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [stagePickerOpen, setStagePickerOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const isAdmin = isAdminRole(roles);
   const trimmedReason = reason.trim();
-  const availableStages = adminStageOptions.filter((option) => option.value !== item.status);
   const selectedLabel = target ? stageLabel(target as ItemStatus) : "";
   const slotLoadFailed = Boolean(item.slot_id && !currentSlot);
   const hasSlot = Boolean(item.slot_id && currentSlot);
@@ -86,6 +88,49 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
       document.removeEventListener("keydown", handleKeydown);
     };
   }, [confirmOpen]);
+
+  useEffect(() => {
+    if (!stagePickerOpen) return;
+
+    const focusId = window.setTimeout(() => stageDialogRef.current?.focus(), 0);
+
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeStagePicker();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeydown);
+    return () => {
+      window.clearTimeout(focusId);
+      document.removeEventListener("keydown", handleKeydown);
+    };
+  }, [stagePickerOpen]);
+
+  function openStagePicker() {
+    if (actionBusy || slotLoadFailed) return;
+    stageReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setStagePickerOpen(true);
+  }
+
+  function closeStagePicker() {
+    setStagePickerOpen(false);
+    window.setTimeout(() => {
+      stageReturnFocusRef.current?.focus();
+      stageReturnFocusRef.current = null;
+    }, 0);
+  }
+
+  function chooseStage(value: Exclude<ItemStatus, "published">) {
+    if (value === item.status) return;
+    setTarget(value);
+    setStagePickerOpen(false);
+    window.setTimeout(() => {
+      stageReturnFocusRef.current?.focus();
+      stageReturnFocusRef.current = null;
+    }, 0);
+  }
 
   function openConfirm() {
     if (slotLoadFailed) {
@@ -118,7 +163,7 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
     setMessage(null);
 
     try {
-      const rpc = supabase.rpc as unknown as AdminStageRpc;
+      const rpc = supabase.rpc.bind(supabase) as unknown as AdminStageRpc;
       const { error } = await rpc("admin_change_item_stage", {
         p_item: item.id,
         p_to: target as ItemStatus,
@@ -163,13 +208,19 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
       {message && !confirmOpen ? <p className="notice" role="alert">{message}</p> : null}
       {slotLoadFailed ? <p className="notice" role="alert">تعذر تحميل موعد النشر المرتبط. أعد المحاولة قبل تغيير المرحلة.</p> : null}
       <p className="muted">المرحلة الحالية: {stageLabel(item.status)}</p>
-      <label className="field">
-        المرحلة الجديدة
-        <select className="input" value={target} disabled={actionBusy || slotLoadFailed} onChange={(event) => setTarget(event.target.value)}>
-          <option value="">اختر المرحلة</option>
-          {availableStages.map((stage) => <option key={stage.value} value={stage.value}>{stage.label}</option>)}
-        </select>
-      </label>
+      <div className="field">
+        <span>المرحلة الجديدة</span>
+        <button
+          aria-expanded={stagePickerOpen}
+          aria-haspopup="dialog"
+          className="input"
+          disabled={actionBusy || slotLoadFailed}
+          onClick={openStagePicker}
+          type="button"
+        >
+          {selectedLabel || "اختر المرحلة"}
+        </button>
+      </div>
       <label className="field">
         سبب تغيير المرحلة
         <textarea
@@ -181,6 +232,67 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
         />
       </label>
       <button className="button" type="button" disabled={!canReview} onClick={openConfirm}>مراجعة تغيير المرحلة</button>
+
+      {stagePickerOpen ? (
+        <div className="veil" onClick={(event) => { event.stopPropagation(); closeStagePicker(); }}>
+          <section
+            aria-labelledby="admin-stage-picker-title"
+            aria-modal="true"
+            className="confirm-panel stack"
+            onClick={(event) => event.stopPropagation()}
+            ref={stageDialogRef}
+            role="dialog"
+            tabIndex={-1}
+          >
+            <h2 id="admin-stage-picker-title">اختيار المرحلة الجديدة</h2>
+            <p className="muted">المرحلة الحالية: {stageLabel(item.status)}</p>
+            <div className="read-box stack">
+              {adminStageOptions.filter((stage) => stage.value !== "cancelled").map((stage) => {
+                const isCurrent = stage.value === item.status;
+                const isSelected = stage.value === target;
+                return (
+                  <button
+                    aria-disabled={isCurrent}
+                    aria-pressed={isSelected}
+                    className={`radio-row ${isSelected ? "step is-current" : ""}`}
+                    disabled={isCurrent}
+                    key={stage.value}
+                    onClick={() => chooseStage(stage.value)}
+                    type="button"
+                  >
+                    <span>{stage.label}</span>
+                    {isCurrent ? <span className="pill">الحالية</span> : null}
+                    {isSelected ? <span className="pill">مختارة</span> : null}
+                  </button>
+                );
+              })}
+              <div className="override-box">
+                <p className="eyebrow">إجراء مختلف</p>
+                {adminStageOptions.filter((stage) => stage.value === "cancelled").map((stage) => {
+                  const isCurrent = stage.value === item.status;
+                  const isSelected = stage.value === target;
+                  return (
+                    <button
+                      aria-disabled={isCurrent}
+                      aria-pressed={isSelected}
+                      className="radio-row button-secondary"
+                      disabled={isCurrent}
+                      key={stage.value}
+                      onClick={() => chooseStage(stage.value)}
+                      type="button"
+                    >
+                      <span>{stage.label}</span>
+                      {isCurrent ? <span className="pill">الحالية</span> : null}
+                      {isSelected ? <span className="pill">مختارة</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <button className="button button-secondary" type="button" onClick={closeStagePicker}>إلغاء</button>
+          </section>
+        </div>
+      ) : null}
 
       {confirmOpen ? (
         <div className="veil" onClick={(event) => { event.stopPropagation(); if (!actionInFlightRef.current) closeConfirm(); }}>
