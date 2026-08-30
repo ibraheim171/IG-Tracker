@@ -1,3 +1,42 @@
-import { redirect } from "next/navigation";
+import { SlotsBoard } from "@/components/slots-board";
+import { getCurrentProfile } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
+import type { BoardItem, BoardSlot } from "@/lib/ui-data";
 
-export default function Home() { redirect("/health"); }
+type ItemWithLookups = {
+  id: string;
+  ref: string;
+  title: string;
+  status: BoardItem["status"];
+  slot_id: string | null;
+  track_id: number | null;
+  idea_type_id: number | null;
+};
+
+export default async function HomePage() {
+  const [profile, supabase] = await Promise.all([getCurrentProfile(), createClient()]);
+  const since = new Date(Date.now() - 4 * 86_400_000).toISOString();
+  const [{ data: slotsData }, { data: waitingRows }, { data: itemRows }] = await Promise.all([
+    supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items, n_ready").gte("slot_at", since).order("slot_at", { ascending: true }),
+    supabase.from("v_waiting").select("id, waiting_on"),
+    supabase.from("items").select("id, ref, title, status, slot_id, track_id, idea_type_id").not("slot_id", "is", null),
+  ]);
+  const slots = (slotsData ?? []) as BoardSlot[];
+  const slotIds = new Set(slots.map((slot) => slot.slot_id).filter((id): id is string => Boolean(id)));
+  const rawItems = ((itemRows ?? []) as ItemWithLookups[]).filter((item) => item.slot_id && slotIds.has(item.slot_id));
+  const waitingById = new Map((waitingRows ?? []).map((row) => [row.id, row.waiting_on]));
+  const items: BoardItem[] = rawItems.map((item) => ({
+    id: item.id,
+    ref: item.ref,
+    title: item.title,
+    status: item.status,
+    slot_id: item.slot_id,
+    track_id: item.track_id,
+    idea_type_id: item.idea_type_id,
+    track_name: null,
+    track_color: null,
+    idea_type: null,
+    waiting_on: waitingById.get(item.id) ?? null,
+  }));
+  return <SlotsBoard slots={slots} items={items} currentUserId={profile.id} roles={profile.roles} />;
+}
