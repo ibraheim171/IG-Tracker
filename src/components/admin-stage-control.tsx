@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/lib/database.types";
 import type { ItemStatus, RoleName } from "@/lib/ui-data";
@@ -52,19 +52,21 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
   const supabase = useMemo(() => createClient(), []);
   const dialogRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const actionInFlightRef = useRef(false);
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
   const [slotDecision, setSlotDecision] = useState<SlotDecision>("keep");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [actionBusy, setActionBusy] = useState(false);
   const isAdmin = isAdminRole(roles);
   const trimmedReason = reason.trim();
   const availableStages = adminStageOptions.filter((option) => option.value !== item.status);
   const selectedLabel = target ? stageLabel(target as ItemStatus) : "";
+  const slotLoadFailed = Boolean(item.slot_id && !currentSlot);
   const hasSlot = Boolean(item.slot_id && currentSlot);
   const slotIsPast = isPastSlot(currentSlot);
-  const canReview = Boolean(target && trimmedReason.length >= 5 && trimmedReason.length <= 500 && !isPending);
+  const canReview = Boolean(target && trimmedReason.length >= 5 && trimmedReason.length <= 500 && !actionBusy && !slotLoadFailed);
 
   useEffect(() => {
     if (!confirmOpen) return;
@@ -74,7 +76,7 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
     function handleKeydown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        closeConfirm();
+        if (!actionInFlightRef.current) closeConfirm();
       }
     }
 
@@ -86,6 +88,10 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
   }, [confirmOpen]);
 
   function openConfirm() {
+    if (slotLoadFailed) {
+      setMessage("تعذر تحميل موعد النشر المرتبط. أعد المحاولة قبل تغيير المرحلة.");
+      return;
+    }
     if (!canReview) {
       setMessage("اختر المرحلة الجديدة واكتب سببًا واضحًا من 5 إلى 500 حرف.");
       return;
@@ -97,6 +103,7 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
   }
 
   function closeConfirm() {
+    if (actionInFlightRef.current) return;
     setConfirmOpen(false);
     window.setTimeout(() => {
       returnFocusRef.current?.focus();
@@ -105,26 +112,35 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
   }
 
   async function submitChange() {
-    if (!target || !canReview || isPending) return;
-    const rpc = supabase.rpc as unknown as AdminStageRpc;
-    const { error } = await rpc("admin_change_item_stage", {
-      p_item: item.id,
-      p_to: target as ItemStatus,
-      p_reason: trimmedReason,
-      p_clear_slot: hasSlot && slotDecision === "clear",
-    });
+    if (!target || !canReview || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    setActionBusy(true);
+    setMessage(null);
 
-    if (error) {
-      setMessage(parseRuleMessage(extractMessage(error)));
-      return;
+    try {
+      const rpc = supabase.rpc as unknown as AdminStageRpc;
+      const { error } = await rpc("admin_change_item_stage", {
+        p_item: item.id,
+        p_to: target as ItemStatus,
+        p_reason: trimmedReason,
+        p_clear_slot: hasSlot && slotDecision === "clear",
+      });
+
+      if (error) {
+        setMessage(parseRuleMessage(extractMessage(error)));
+        return;
+      }
+
+      setConfirmOpen(false);
+      setTarget("");
+      setReason("");
+      setSlotDecision("keep");
+      setMessage("تم تغيير المرحلة.");
+      onChanged();
+    } finally {
+      actionInFlightRef.current = false;
+      setActionBusy(false);
     }
-
-    setConfirmOpen(false);
-    setTarget("");
-    setReason("");
-    setSlotDecision("keep");
-    setMessage("تم تغيير المرحلة.");
-    onChanged();
   }
 
   if (!isAdmin) return null;
@@ -142,11 +158,12 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
   return (
     <section className="drawer-section admin-stage stack">
       <h3>إدارة المرحلة</h3>
-      {message ? <p className="notice" role="alert">{message}</p> : null}
+      {message && !confirmOpen ? <p className="notice" role="alert">{message}</p> : null}
+      {slotLoadFailed ? <p className="notice" role="alert">تعذر تحميل موعد النشر المرتبط. أعد المحاولة قبل تغيير المرحلة.</p> : null}
       <p className="muted">المرحلة الحالية: {stageLabel(item.status)}</p>
       <label className="field">
         المرحلة الجديدة
-        <select className="input" value={target} onChange={(event) => setTarget(event.target.value)}>
+        <select className="input" value={target} disabled={actionBusy || slotLoadFailed} onChange={(event) => setTarget(event.target.value)}>
           <option value="">اختر المرحلة</option>
           {availableStages.map((stage) => <option key={stage.value} value={stage.value}>{stage.label}</option>)}
         </select>
@@ -156,6 +173,7 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
         <textarea
           className="input textarea"
           value={reason}
+          disabled={actionBusy || slotLoadFailed}
           onChange={(event) => setReason(event.target.value)}
           placeholder="اكتب سببًا واضحًا سيبقى محفوظًا في سجل الانتقالات."
         />
@@ -163,7 +181,7 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
       <button className="button" type="button" disabled={!canReview} onClick={openConfirm}>مراجعة تغيير المرحلة</button>
 
       {confirmOpen ? (
-        <div className="veil" onClick={(event) => { event.stopPropagation(); closeConfirm(); }}>
+        <div className="veil" onClick={(event) => { event.stopPropagation(); if (!actionInFlightRef.current) closeConfirm(); }}>
           <section
             aria-labelledby="admin-stage-confirm-title"
             aria-modal="true"
@@ -177,8 +195,9 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
             <p><span className="num ref-pill">{item.ref}</span></p>
             <p className="stage-change-line">{stageLabel(item.status)} ← {selectedLabel}</p>
             <div className="read-box">{trimmedReason}</div>
+            {message ? <p className="notice" role="alert">{message}</p> : null}
             {hasSlot ? (
-              <fieldset className="admin-stage-slot stack">
+              <fieldset className="admin-stage-slot stack" disabled={actionBusy}>
                 <legend>موعد النشر</legend>
                 <p className="num">{formatHebronDateTime(currentSlot?.slot_at)}</p>
                 {slotIsPast ? <p className="notice">هذا الموعد مضى. لا يتم إلغاؤه تلقائيًا؛ القرار للأدمن.</p> : null}
@@ -193,8 +212,8 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
               </fieldset>
             ) : null}
             <div className="actions-row">
-              <button className="button" type="button" disabled={isPending} onClick={() => startTransition(() => { void submitChange(); })}>تأكيد التغيير</button>
-              <button className="button button-secondary" type="button" disabled={isPending} onClick={closeConfirm}>إلغاء</button>
+              <button className="button" type="button" disabled={actionBusy} onClick={() => { void submitChange(); }}>{actionBusy ? "جارٍ التنفيذ..." : "تأكيد التغيير"}</button>
+              <button className="button button-secondary" type="button" disabled={actionBusy} onClick={closeConfirm}>إلغاء</button>
             </div>
           </section>
         </div>
