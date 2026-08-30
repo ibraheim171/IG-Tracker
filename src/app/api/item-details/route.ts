@@ -95,6 +95,10 @@ export async function GET(request: NextRequest) {
         : Promise.resolve({ data: null, error: null }),
     ]);
 
+    if (currentSlotId && (currentSlotResult.error || !currentSlotResult.data)) {
+      return jsonWithCookies(cookieResponse, { error: "تعذر تحميل موعد النشر المرتبط. أعد المحاولة قبل تغيير المرحلة." }, { status: 500 });
+    }
+
     const details: DrawerDetails = {
       item,
       participants: (participantsResult.data ?? []) as unknown as ParticipantRecord[],
