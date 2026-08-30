@@ -16,13 +16,17 @@ security definer
 set search_path = public
 as $$
 declare
-  it              public.items;
-  previous_status public.item_status;
-  old_slot_id     uuid;
-  violations      text[] := '{}';
-  trimmed_reason  text;
-  remaining_items integer;
-  slot_note       text;
+  it                       public.items;
+  previous_status          public.item_status;
+  old_slot_id              uuid;
+  old_slot_at              timestamptz;
+  old_slot_state           public.slot_state;
+  new_slot_state           public.slot_state;
+  has_remaining_items      boolean := false;
+  has_published_remaining  boolean := false;
+  violations               text[] := '{}';
+  trimmed_reason           text;
+  slot_note                text;
 begin
   if auth.uid() is null then
     raise exception 'AUTH_REQUIRED: سجّل الدخول أولاً';
@@ -69,13 +73,15 @@ begin
   old_slot_id := it.slot_id;
 
   if old_slot_id is not null then
-    perform 1 from public.publishing_slots where id = old_slot_id for update;
-    if not found then
+    select slot_at, state into old_slot_at, old_slot_state
+      from public.publishing_slots
+     where id = old_slot_id
+     for update;
+
+    if old_slot_at is null then
       raise exception 'SLOT_NOT_FOUND: موعد النشر المرتبط غير موجود';
     end if;
   end if;
-
-  violations := public.item_violations(p_item, p_to);
 
   slot_note := case
     when old_slot_id is null then 'قرار موعد النشر: لا يوجد موعد مرتبط'
@@ -85,24 +91,48 @@ begin
 
   perform set_config('app.rpc', 'on', true);
 
+  if p_clear_slot and old_slot_id is not null then
+    update public.items
+       set slot_id = null
+     where id = p_item
+     returning * into it;
+  end if;
+
+  violations := public.item_violations(p_item, p_to);
+
+  update public.items
+     set status = p_to
+   where id = p_item
+   returning * into it;
+
   insert into public.transitions (item_id, from_status, to_status, actor_id,
                                   is_override, override_reason, violations, note)
   values (p_item, previous_status, p_to, auth.uid(),
           true, trimmed_reason, nullif(violations, '{}'), slot_note);
 
-  update public.items
-     set status = p_to,
-         slot_id = case when p_clear_slot and old_slot_id is not null then null else slot_id end
-   where id = p_item
-   returning * into it;
-
   if p_clear_slot and old_slot_id is not null then
-    select count(*) into remaining_items
-      from public.items
-     where slot_id = old_slot_id;
+    select exists (
+             select 1
+               from public.items
+              where slot_id = old_slot_id
+           ),
+           exists (
+             select 1
+               from public.items
+              where slot_id = old_slot_id
+                and status = 'published'
+           )
+      into has_remaining_items, has_published_remaining;
+
+    new_slot_state := case
+      when old_slot_state = 'published' or has_published_remaining then 'published'::public.slot_state
+      when has_remaining_items then 'assigned'::public.slot_state
+      when old_slot_state = 'skipped' or old_slot_at <= now() then 'skipped'::public.slot_state
+      else 'open'::public.slot_state
+    end;
 
     update public.publishing_slots
-       set state = case when remaining_items = 0 then 'open'::public.slot_state else 'assigned'::public.slot_state end
+       set state = new_slot_state
      where id = old_slot_id;
 
     if not found then
