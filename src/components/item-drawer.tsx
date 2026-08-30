@@ -671,12 +671,12 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 <label className="field">الملاحظات<textarea className="input textarea" value={editable.notes} onChange={(event) => updateEditable({ notes: event.target.value })} /></label>
                 <label className="field">رابط ملف الإنتاج<input className="input" value={editable.production_file_url} onChange={(event) => updateEditable({ production_file_url: event.target.value })} /></label>
                 <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => saveFields(true))}>حفظ التعديلات</button>
-                <fieldset>
+                <fieldset className="drawer-partners">
                   <legend>الشركاء</legend>
-                  <div className="checks">
-                    {partners.map((partner) => <label key={partner.id}><input type="checkbox" checked={editable.partnerIds.includes(partner.id.toString())} onChange={(event) => updateEditable({ partnerIds: event.target.checked ? [...editable.partnerIds, partner.id.toString()] : editable.partnerIds.filter((id) => id !== partner.id.toString()) })} /> {partner.name}</label>)}
+                  <div className="drawer-partner-checks">
+                    {partners.map((partner) => <label className="drawer-partner-option" key={partner.id}><input type="checkbox" checked={editable.partnerIds.includes(partner.id.toString())} onChange={(event) => updateEditable({ partnerIds: event.target.checked ? [...editable.partnerIds, partner.id.toString()] : editable.partnerIds.filter((id) => id !== partner.id.toString()) })} /> <span>{partner.name}</span></label>)}
                   </div>
-                  <div className="stack">
+                  <div className="drawer-new-partner stack">
                     <label className="field">شريك جديد<input className="input" value={editable.newPartner} onChange={(event) => updateEditable({ newPartner: event.target.value })} /></label>
                     <button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => runAction(savePartners)}>حفظ الشركاء</button>
                   </div>

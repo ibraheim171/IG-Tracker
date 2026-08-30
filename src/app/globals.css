@@ -282,6 +282,12 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .step.is-done { background: color-mix(in srgb, var(--accent-soft) 40%, var(--card)); }
 .step.is-current { border-color: var(--accent); font-weight: 800; }
 .override-box { display: grid; gap: 0.75rem; border: 1px solid var(--accent); border-radius: 0.5rem; padding: 0.75rem; }
+.drawer-partners { display: grid; gap: 0; }
+.drawer-partner-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem 0.65rem; }
+.drawer-partner-option { display: flex; align-items: center; gap: 0.45rem; min-inline-size: 0; min-block-size: 44px; padding: 0.45rem 0.55rem; border: 1px solid var(--rule); border-radius: 0.5rem; background: color-mix(in srgb, var(--paper) 50%, var(--card)); line-height: 1.35; }
+.drawer-partner-option input { flex: 0 0 auto; inline-size: 1rem; block-size: 1rem; min-block-size: 1rem; margin: 0; }
+.drawer-partner-option span { min-inline-size: 0; overflow-wrap: anywhere; }
+.drawer-new-partner { margin-block-start: 1rem; padding-block-start: 1rem; border-block-start: 1px solid var(--rule); }
 
 .route-loading {
   min-block-size: 60dvh;
@@ -368,6 +374,7 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
   .confirm-panel { align-self: center; margin-block-end: 0; }
   .item-row { grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; }
   .meta-grid, .form-grid, .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .drawer-partner-checks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
