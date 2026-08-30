@@ -178,7 +178,7 @@ export function isAdminRole(roles: RoleName[]) {
 }
 
 export const statusLabels: Record<ItemStatus, string> = {
-  idea: "كتابة الكابشن",
+  idea: "الكتابة",
   writing: "اعتماد المحتوى",
   content_approved: "الإنتاج",
   in_production: "اعتماد التصميم",
