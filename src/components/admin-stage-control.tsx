@@ -137,6 +137,8 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
       setSlotDecision("keep");
       setMessage("تم تغيير المرحلة.");
       onChanged();
+    } catch {
+      setMessage("تعذر الاتصال أثناء تغيير المرحلة. حاول مجددًا. رمز التشخيص: ADMIN_STAGE_NETWORK");
     } finally {
       actionInFlightRef.current = false;
       setActionBusy(false);
