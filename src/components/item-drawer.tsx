@@ -68,7 +68,7 @@ type Props = {
 };
 
 const pipeline: { key: ItemStatus; label: string }[] = [
-  { key: "idea", label: "كتابة الكابشن" },
+  { key: "idea", label: "الكتابة" },
   { key: "writing", label: "اعتماد المحتوى" },
   { key: "content_approved", label: "الإنتاج" },
   { key: "in_production", label: "اعتماد التصميم" },
