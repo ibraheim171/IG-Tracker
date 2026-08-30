@@ -79,9 +79,9 @@ export async function GET(request: NextRequest) {
     }
 
     const item = itemResult.data;
+    const currentSlotId = item.slot_id;
     const shouldLoadPerformance = item.status === "published";
-    const shouldLoadOpenSlots = item.status !== "published" && !item.slot_id;
-    const shouldLoadCurrentSlot = Boolean(item.slot_id);
+    const shouldLoadOpenSlots = item.status !== "published" && !currentSlotId;
 
     const [performanceResult, slotsResult, currentSlotResult] = await Promise.all([
       shouldLoadPerformance
@@ -90,8 +90,8 @@ export async function GET(request: NextRequest) {
       shouldLoadOpenSlots
         ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24).abortSignal(request.signal)
         : Promise.resolve({ data: [], error: null }),
-      shouldLoadCurrentSlot
-        ? supabase.from("publishing_slots").select("id, slot_at, state").eq("id", item.slot_id).abortSignal(request.signal).maybeSingle()
+      currentSlotId
+        ? supabase.from("publishing_slots").select("id, slot_at, state").eq("id", currentSlotId).abortSignal(request.signal).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
 
