@@ -8,6 +8,7 @@ import type { TeamMemberOption } from "@/components/team-member-picker";
 type SearchParams = Promise<{ member?: string | string[] }>;
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const materialsLoadError = "تعذر تحميل المواد. حاول مجددًا. رمز التشخيص: MATERIALS_LOAD";
 
 function firstSearchValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -35,13 +36,18 @@ export default async function TeamViewPage({ searchParams }: { searchParams: Sea
       : null;
 
   let materials: MyMaterial[] = [];
+  let materialsError: string | null = null;
   if (selectedMember) {
-    const { data: participantRows } = await supabase
+    const { data: participantRows, error: participantRowsError } = await supabase
       .from("item_participants")
       .select(participantItemsSelect)
       .eq("user_id", selectedMember.id);
 
-    materials = buildMyMaterials((participantRows ?? []) as unknown as ParticipantItemRow[]);
+    if (participantRowsError) {
+      materialsError = materialsLoadError;
+    } else {
+      materials = buildMyMaterials((participantRows ?? []) as unknown as ParticipantItemRow[]);
+    }
   }
 
   return (
@@ -49,6 +55,7 @@ export default async function TeamViewPage({ searchParams }: { searchParams: Sea
       members={members}
       selectedMember={selectedMember}
       invalidMessage={invalidMessage}
+      materialsError={materialsError}
       materials={materials}
       currentUserId={adminProfile.id}
       roles={adminProfile.roles}
