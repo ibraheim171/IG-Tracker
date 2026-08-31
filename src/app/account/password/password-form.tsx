@@ -26,8 +26,8 @@ export function PasswordForm() {
   }
 
   return <form className="stack" onSubmit={submit}>
-    <label className="field">كلمة المرور الجديدة<input className="input" name="password" type="password" autoComplete="new-password" minLength={8} required /></label>
-    <label className="field">تأكيد كلمة المرور<input className="input" name="confirmation" type="password" autoComplete="new-password" minLength={8} required /></label>
+    <label className="field">كلمة المرور الجديدة<input className="input" name="password" type="password" autoComplete="new-password" minLength={12} required /></label>
+    <label className="field">تأكيد كلمة المرور<input className="input" name="confirmation" type="password" autoComplete="new-password" minLength={12} required /></label>
     {error && <p className="error" role="alert">{error}</p>}
     <button className="button" disabled={loading}>{loading ? "جارٍ الحفظ" : "حفظ كلمة المرور"}</button>
   </form>;
