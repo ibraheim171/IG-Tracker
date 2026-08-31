@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useEffect, useRef, useState } from "react";
 import type { Tables } from "@/lib/database.types";
 import type { ItemStatus, RoleName } from "@/lib/ui-data";
-import { extractMessage, formatHebronDateTime, isAdminRole, parseRuleMessage } from "@/lib/ui-data";
+import { formatHebronDateTime, isAdminRole } from "@/lib/ui-data";
 
 type ItemRow = Tables<"items">;
 
@@ -19,15 +18,8 @@ type Props = {
   onChanged: () => void;
 };
 
-type AdminStageRpc = (
-  fn: "admin_change_item_stage",
-  args: {
-    p_item: string;
-    p_to: ItemStatus;
-    p_reason: string;
-    p_clear_slot: boolean;
-  },
-) => PromiseLike<{ data: ItemRow | null; error: { message?: string } | null }>;
+type AdminStageRouteResponse = { item: ItemRow | null } | { error: string };
+type ItemDetailsProbeResponse = { details?: { item?: Pick<ItemRow, "status"> | null }; error?: string };
 
 const adminStageOptions: { value: Exclude<ItemStatus, "published">; label: string }[] = [
   { value: "idea", label: "الكتابة" },
@@ -39,6 +31,9 @@ const adminStageOptions: { value: Exclude<ItemStatus, "published">; label: strin
   { value: "cancelled", label: "ملغاة" },
 ];
 
+const routeFallbackError = "تعذر تغيير المرحلة. حاول مجددًا. رمز التشخيص: ADMIN_STAGE_SERVER";
+const networkVerificationError = "تعذر تأكيد نتيجة تغيير المرحلة. أغلق البطاقة وأعد فتحها قبل المحاولة. رمز التشخيص: ADMIN_STAGE_NETWORK";
+
 function stageLabel(status: ItemStatus) {
   if (status === "published") return "منشورة";
   return adminStageOptions.find((option) => option.value === status)?.label ?? status;
@@ -48,8 +43,20 @@ function isPastSlot(slot: AdminStageCurrentSlot | null) {
   return Boolean(slot?.slot_at && new Date(slot.slot_at).getTime() < Date.now());
 }
 
+async function readAdminStageResponse(response: Response) {
+  try {
+    return (await response.json()) as AdminStageRouteResponse;
+  } catch {
+    return null;
+  }
+}
+
+function adminStageError(payload: AdminStageRouteResponse | null) {
+  if (payload && "error" in payload && payload.error) return payload.error;
+  return routeFallbackError;
+}
+
 export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props) {
-  const supabase = useMemo(() => createClient(), []);
   const dialogRef = useRef<HTMLElement | null>(null);
   const stageDialogRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -156,34 +163,75 @@ export function AdminStageControl({ item, currentSlot, roles, onChanged }: Props
     }, 0);
   }
 
+  function finishSuccessfulChange() {
+    setConfirmOpen(false);
+    setTarget("");
+    setReason("");
+    setSlotDecision("keep");
+    setMessage("تم تغيير المرحلة.");
+    try {
+      onChanged();
+    } catch {
+      setMessage("تم تغيير المرحلة. أعد فتح البطاقة لتحديث العرض.");
+    }
+  }
+
+  async function verifyStageAfterInterruptedResponse(expectedTarget: ItemStatus) {
+    try {
+      const response = await fetch(`/api/item-details?itemId=${encodeURIComponent(item.id)}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+
+      if (!response.ok) return false;
+
+      const payload = (await response.json()) as ItemDetailsProbeResponse;
+      return payload.details?.item?.status === expectedTarget;
+    } catch {
+      return false;
+    }
+  }
+
   async function submitChange() {
     if (!target || !canReview || actionInFlightRef.current) return;
+    const requestedTarget = target as ItemStatus;
     actionInFlightRef.current = true;
     setActionBusy(true);
     setMessage(null);
 
     try {
-      const rpc = supabase.rpc.bind(supabase) as unknown as AdminStageRpc;
-      const { error } = await rpc("admin_change_item_stage", {
-        p_item: item.id,
-        p_to: target as ItemStatus,
-        p_reason: trimmedReason,
-        p_clear_slot: hasSlot && slotDecision === "clear",
+      const response = await fetch("/api/admin/change-item-stage", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          itemId: item.id,
+          target: requestedTarget,
+          reason: trimmedReason,
+          clearSlot: hasSlot && slotDecision === "clear",
+        }),
       });
+      const payload = await readAdminStageResponse(response);
 
-      if (error) {
-        setMessage(parseRuleMessage(extractMessage(error)));
+      if (!response.ok || (payload && "error" in payload)) {
+        setMessage(adminStageError(payload));
         return;
       }
 
-      setConfirmOpen(false);
-      setTarget("");
-      setReason("");
-      setSlotDecision("keep");
-      setMessage("تم تغيير المرحلة.");
-      onChanged();
+      finishSuccessfulChange();
     } catch {
-      setMessage("تعذر الاتصال أثناء تغيير المرحلة. حاول مجددًا. رمز التشخيص: ADMIN_STAGE_NETWORK");
+      const verified = await verifyStageAfterInterruptedResponse(requestedTarget);
+      if (verified) {
+        finishSuccessfulChange();
+        return;
+      }
+
+      setMessage(networkVerificationError);
     } finally {
       actionInFlightRef.current = false;
       setActionBusy(false);
