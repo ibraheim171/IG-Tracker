@@ -148,6 +148,9 @@ export function AccountMenu({ displayName, roles }: { displayName: string; roles
               <Link className="account-menu-link" role="menuitem" href="/admin/users" onClick={() => setOpen(false)}>
                 إدارة المستخدمين
               </Link>
+              <Link className="account-menu-link" role="menuitem" href="/admin/team-view" onClick={() => setOpen(false)}>
+                عرض مهام الفريق
+              </Link>
               <Link className="account-menu-link" role="menuitem" href="/health" onClick={() => setOpen(false)}>
                 فحص النظام
               </Link>
