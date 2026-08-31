@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { RoleName } from "@/lib/ui-data";
 
 export type TeamMemberOption = {
@@ -29,7 +29,6 @@ function roleText(roles: RoleName[]) {
 export function TeamMemberPicker({ members, selectedMemberId }: { members: TeamMemberOption[]; selectedMemberId: string | null }) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const dialogId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
@@ -63,10 +62,8 @@ export function TeamMemberPicker({ members, selectedMemberId }: { members: TeamM
   }
 
   function chooseMember(member: TeamMemberOption) {
-    const nextParams = new URLSearchParams(searchParams.toString());
-    nextParams.set("member", member.id);
     setOpen(false);
-    router.push(`${pathname}?${nextParams.toString()}`);
+    router.push(`${pathname}?member=${encodeURIComponent(member.id)}`);
     window.requestAnimationFrame(() => triggerRef.current?.focus());
   }
 
