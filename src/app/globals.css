@@ -329,8 +329,8 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .member-trigger-body strong, .member-option-body strong { overflow-wrap: anywhere; font-family: var(--font-heading), sans-serif; }
 .member-trigger-body span, .member-option-body span, .member-trigger-placeholder { color: color-mix(in srgb, var(--ink) 65%, var(--card)); }
 .member-trigger-placeholder { flex: 1 1 auto; font-weight: 700; }
-.team-picker-dialog { max-block-size: min(42rem, calc(100dvh - 2rem)); overflow: hidden; }
-.member-option-list { display: grid; gap: 0.5rem; overflow: auto; padding-block-end: 0.1rem; }
+.team-picker-dialog { grid-template-rows: auto minmax(0, 1fr); max-block-size: min(42rem, calc(100dvh - 2rem)); overflow: hidden; }
+.member-option-list { display: grid; min-block-size: 0; gap: 0.5rem; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; padding-block-end: 0.1rem; }
 .member-option { justify-content: start; }
 .member-option.is-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 35%, var(--card)); }
 
