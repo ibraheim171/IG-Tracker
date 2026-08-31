@@ -2,7 +2,6 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 
 export function PasswordForm() {
   const router = useRouter();
@@ -16,13 +15,13 @@ export function PasswordForm() {
     const confirmation = String(form.get("confirmation"));
     if (password !== confirmation) { setError("كلمتا المرور غير متطابقتين."); return; }
     setLoading(true);
-    const supabase = createClient();
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) { setError("انتهت الجلسة. سجّل الدخول مرة أخرى."); setLoading(false); return; }
-    const { error: updateError } = await supabase.auth.updateUser({ password });
-    if (updateError) { setError("تعذر تغيير كلمة المرور."); setLoading(false); return; }
-    const { error: profileError } = await supabase.from("profiles").update({ must_change_password: false }).eq("id", user.id);
-    if (profileError) { setError("تم تغيير كلمة المرور، لكن تعذر تأكيدها. حاول مجدداً."); setLoading(false); return; }
+    const response = await fetch("/api/account/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
+    if (!response.ok) {
+      const payload: unknown = await response.json();
+      setError(isErrorResponse(payload) ? `${payload.error} [${payload.code}]` : "تعذر تغيير كلمة المرور.");
+      setLoading(false);
+      return;
+    }
     router.replace("/health"); router.refresh();
   }
 
@@ -32,4 +31,8 @@ export function PasswordForm() {
     {error && <p className="error" role="alert">{error}</p>}
     <button className="button" disabled={loading}>{loading ? "جارٍ الحفظ" : "حفظ كلمة المرور"}</button>
   </form>;
+}
+
+function isErrorResponse(value: unknown): value is { error: string; code: string } {
+  return typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).error === "string" && typeof (value as Record<string, unknown>).code === "string";
 }
