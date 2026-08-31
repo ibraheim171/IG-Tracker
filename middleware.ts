@@ -10,7 +10,7 @@ export async function middleware(request: NextRequest) {
   if (!user) return path === "/login" ? response : NextResponse.redirect(new URL("/login", request.url));
   const { data: profile } = await supabase.from("profiles").select("must_change_password, active").eq("id", user.id).single();
   if (!profile?.active) { await supabase.auth.signOut(); return NextResponse.redirect(new URL("/login", request.url)); }
-  if (profile.must_change_password && path !== "/account/password") return NextResponse.redirect(new URL("/account/password", request.url));
+  if (profile.must_change_password && path !== "/account/password" && path !== "/api/account/password") return NextResponse.redirect(new URL("/account/password", request.url));
   if (!profile.must_change_password && (path === "/login" || path === "/account/password")) return NextResponse.redirect(new URL("/health", request.url));
   return response;
 }
