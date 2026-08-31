@@ -282,6 +282,12 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .step.is-done { background: color-mix(in srgb, var(--accent-soft) 40%, var(--card)); }
 .step.is-current { border-color: var(--accent); font-weight: 800; }
 .override-box { display: grid; gap: 0.75rem; border: 1px solid var(--accent); border-radius: 0.5rem; padding: 0.75rem; }
+.admin-stage .textarea { min-block-size: 5rem; }
+.stage-change-line { font-family: var(--font-heading), sans-serif; font-size: 1.05rem; font-weight: 800; }
+.admin-stage-slot { gap: 0.75rem; }
+.radio-row { display: flex; align-items: center; gap: 0.5rem; min-block-size: 44px; padding: 0.55rem 0.65rem; border: 1px solid var(--rule); border-radius: 0.5rem; background: color-mix(in srgb, var(--paper) 50%, var(--card)); }
+.radio-row input { flex: 0 0 auto; inline-size: 1rem; block-size: 1rem; min-block-size: 1rem; margin: 0; }
+.radio-row span { min-inline-size: 0; overflow-wrap: anywhere; }
 .drawer-partners { display: grid; gap: 0; }
 .drawer-partner-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem 0.65rem; }
 .drawer-partner-option { display: flex; align-items: center; gap: 0.45rem; min-inline-size: 0; min-block-size: 44px; padding: 0.45rem 0.55rem; border: 1px solid var(--rule); border-radius: 0.5rem; background: color-mix(in srgb, var(--paper) 50%, var(--card)); line-height: 1.35; }

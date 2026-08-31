@@ -5,6 +5,7 @@ import { createRouteClient } from "@/lib/supabase/route";
 type ItemRow = Tables<"items">;
 type PerformanceRow = Tables<"v_item_performance">;
 type ParticipantPart = Tables<"item_participants">["part"];
+type CurrentSlot = Pick<Tables<"publishing_slots">, "id" | "slot_at" | "state">;
 
 type ParticipantRecord = {
   user_id: string;
@@ -27,6 +28,7 @@ type DrawerDetails = {
   approvals: ApprovalRecord[];
   performance: PerformanceRow | null;
   openSlots: OpenSlot[];
+  currentSlot: CurrentSlot | null;
 };
 
 export const dynamic = "force-dynamic";
@@ -77,17 +79,25 @@ export async function GET(request: NextRequest) {
     }
 
     const item = itemResult.data;
+    const currentSlotId = item.slot_id;
     const shouldLoadPerformance = item.status === "published";
-    const shouldLoadOpenSlots = item.status !== "published" && !item.slot_id;
+    const shouldLoadOpenSlots = item.status !== "published" && !currentSlotId;
 
-    const [performanceResult, slotsResult] = await Promise.all([
+    const [performanceResult, slotsResult, currentSlotResult] = await Promise.all([
       shouldLoadPerformance
         ? supabase.from("v_item_performance").select("*").eq("id", itemId).abortSignal(request.signal).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
       shouldLoadOpenSlots
         ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24).abortSignal(request.signal)
         : Promise.resolve({ data: [], error: null }),
+      currentSlotId
+        ? supabase.from("publishing_slots").select("id, slot_at, state").eq("id", currentSlotId).abortSignal(request.signal).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
     ]);
+
+    if (currentSlotId && (currentSlotResult.error || !currentSlotResult.data)) {
+      return jsonWithCookies(cookieResponse, { error: "تعذر تحميل موعد النشر المرتبط. أعد المحاولة قبل تغيير المرحلة." }, { status: 500 });
+    }
 
     const details: DrawerDetails = {
       item,
@@ -96,6 +106,7 @@ export async function GET(request: NextRequest) {
       approvals: approvalsResult.data ?? [],
       performance: performanceResult.error ? null : performanceResult.data,
       openSlots: slotsResult.error ? [] : slotsResult.data ?? [],
+      currentSlot: currentSlotResult.error ? null : currentSlotResult.data,
     };
 
     return jsonWithCookies(cookieResponse, { details });

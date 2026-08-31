@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
+import { AdminStageControl, type AdminStageCurrentSlot } from "@/components/admin-stage-control";
 import { useReferenceData } from "@/components/reference-data-provider";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types";
@@ -9,6 +10,7 @@ import { extractMessage, formatHebronDateTime, formatNumber, formatPercent, isAd
 
 type ItemRow = Tables<"items">;
 type PerformanceRow = Tables<"v_item_performance">;
+type CurrentSlot = AdminStageCurrentSlot;
 
 type ParticipantRecord = {
   user_id: string;
@@ -31,6 +33,7 @@ type DrawerDetails = {
   approvals: ApprovalRecord[];
   performance: PerformanceRow | null;
   openSlots: OpenSlot[];
+  currentSlot: CurrentSlot | null;
 };
 
 type ItemDetailsResponse = { details: DrawerDetails } | { error: string };
@@ -65,7 +68,7 @@ type Props = {
 };
 
 const pipeline: { key: ItemStatus; label: string }[] = [
-  { key: "idea", label: "كتابة الكابشن" },
+  { key: "idea", label: "الكتابة" },
   { key: "writing", label: "اعتماد المحتوى" },
   { key: "content_approved", label: "الإنتاج" },
   { key: "in_production", label: "اعتماد التصميم" },
@@ -148,10 +151,6 @@ function findTrack(tracks: TrackOption[], item: ItemRow | DrawerPreview | null) 
 
 function findIdeaType(ideaTypes: IdeaTypeOption[], item: ItemRow | DrawerPreview | null) {
   return ideaTypes.find((ideaType) => ideaType.id === item?.idea_type_id) ?? null;
-}
-
-function hasAbortName(error: unknown) {
-  return typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError";
 }
 
 export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, largeCaption }: Props) {
@@ -469,6 +468,11 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     onChanged?.();
   }
 
+  function refetchDrawerAndList() {
+    setRetryNonce((current) => current + 1);
+    onChanged?.();
+  }
+
   async function saveFields(showMessage = true, notifyList = showMessage) {
     if (showMessage) clearAutoSaveTimer();
     const currentItem = latestItemRef.current;
@@ -742,6 +746,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 ) : null}
               </section>
             ) : null}
+
+            {item ? <AdminStageControl item={item} currentSlot={drawerDetails?.currentSlot ?? null} roles={roles} onChanged={refetchDrawerAndList} /> : null}
 
             <p className="muted">الحالة الحالية: {statusLabels[displayItem.status]}</p>
           </div>
