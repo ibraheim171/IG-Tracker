@@ -8,12 +8,13 @@ type Props = {
   members: TeamMemberOption[];
   selectedMember: TeamMemberOption | null;
   invalidMessage: string | null;
+  materialsError: string | null;
   materials: MyMaterial[];
   currentUserId: string;
   roles: RoleName[];
 };
 
-export function TeamView({ members, selectedMember, invalidMessage, materials, currentUserId, roles }: Props) {
+export function TeamView({ members, selectedMember, invalidMessage, materialsError, materials, currentUserId, roles }: Props) {
   return (
     <MyMaterials
       title="عرض مهام الفريق"
@@ -21,7 +22,7 @@ export function TeamView({ members, selectedMember, invalidMessage, materials, c
       materials={materials}
       currentUserId={currentUserId}
       roles={roles}
-      showMaterialSections={Boolean(selectedMember)}
+      showMaterialSections={Boolean(selectedMember) && !materialsError}
       beforeLists={(
         <div className="team-view-stack">
           <TeamMemberPicker members={members} selectedMemberId={selectedMember?.id ?? null} />
@@ -34,6 +35,7 @@ export function TeamView({ members, selectedMember, invalidMessage, materials, c
           ) : !invalidMessage ? (
             <p className="muted">اختر عضوًا لعرض المواد المسندة إليه.</p>
           ) : null}
+          {materialsError ? <p className="notice" role="alert">{materialsError}</p> : null}
         </div>
       )}
     />
