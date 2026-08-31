@@ -295,6 +295,45 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .drawer-partner-option span { min-inline-size: 0; overflow-wrap: anywhere; }
 .drawer-new-partner { margin-block-start: 1rem; padding-block-start: 1rem; border-block-start: 1px solid var(--rule); }
 
+.team-view-stack { display: grid; gap: 0.75rem; }
+.team-picker { gap: 0.85rem; }
+.team-picker-head, .team-picker-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.team-picker-head h2, .team-picker-dialog-head h2 { margin: 0; }
+.member-picker-trigger, .member-option {
+  inline-size: 100%;
+  min-block-size: 44px;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--paper) 45%, var(--card));
+  color: var(--ink);
+  padding: 0.65rem 0.75rem;
+  text-align: start;
+}
+.member-picker-trigger:hover, .member-option:hover { border-color: var(--accent); }
+.member-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 2.35rem;
+  inline-size: 2.35rem;
+  block-size: 2.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--card);
+  font-family: var(--font-heading), sans-serif;
+  font-weight: 800;
+}
+.member-trigger-body, .member-option-body { display: grid; gap: 0.15rem; min-inline-size: 0; flex: 1 1 auto; }
+.member-trigger-body strong, .member-option-body strong { overflow-wrap: anywhere; font-family: var(--font-heading), sans-serif; }
+.member-trigger-body span, .member-option-body span, .member-trigger-placeholder { color: color-mix(in srgb, var(--ink) 65%, var(--card)); }
+.member-trigger-placeholder { flex: 1 1 auto; font-weight: 700; }
+.team-picker-dialog { grid-template-rows: auto minmax(0, 1fr); max-block-size: min(42rem, calc(100dvh - 2rem)); overflow: hidden; }
+.member-option-list { display: grid; min-block-size: 0; gap: 0.5rem; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; padding-block-end: 0.1rem; }
+.member-option { justify-content: start; }
+.member-option.is-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 35%, var(--card)); }
+
 .route-loading {
   min-block-size: 60dvh;
   opacity: 0;
