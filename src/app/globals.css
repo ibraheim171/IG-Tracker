@@ -88,6 +88,7 @@ textarea:focus-visible {
 .textarea-large { min-block-size: 16rem; }
 .button { border: 0; border-radius: 0.5rem; background: var(--accent); color: var(--card); font-family: var(--font-heading), sans-serif; font-weight: 700; padding-inline: 1rem; }
 .button-secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.button-danger { background: var(--accent); color: var(--card); border: 1px solid var(--accent); }
 .muted { color: color-mix(in srgb, var(--ink) 65%, var(--card)); }
 .error { color: var(--accent); font-weight: 700; }
 
@@ -247,6 +248,38 @@ th, td { border-block-end: 1px solid var(--rule); padding: 0.75rem; text-align: 
 fieldset { border: 1px solid var(--rule); border-radius: 0.5rem; padding: 0.75rem; }
 .checks { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 h1, h2 { font-family: var(--font-heading), sans-serif; }
+.users-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.users-toolbar h2 { margin: 0; }
+.users-table th,
+.users-table td { min-inline-size: 8rem; }
+.users-table th:last-child,
+.users-table td:last-child { min-inline-size: 14rem; }
+.toggle-row { display: inline-flex; align-items: center; gap: 0.45rem; min-block-size: 44px; }
+.toggle-row input { flex: 0 0 auto; inline-size: 1rem; block-size: 1rem; min-block-size: 1rem; margin: 0; }
+.segmented { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.35rem; }
+.segmented button {
+  min-block-size: 44px;
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--paper) 50%, var(--card));
+  color: var(--ink);
+  font-family: var(--font-heading), sans-serif;
+  font-weight: 700;
+}
+.segmented button.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--card));
+  color: var(--accent);
+}
+.one-time-password {
+  display: block;
+  inline-size: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  background: var(--card);
+  padding: 0.75rem;
+}
 
 .screen-head { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
 .eyebrow { margin: 0; color: var(--accent); font-family: var(--font-heading), sans-serif; font-weight: 700; }
