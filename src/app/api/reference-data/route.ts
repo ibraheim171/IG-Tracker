@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createRouteClient } from "@/lib/supabase/route";
+import { requireActiveRouteProfile } from "@/lib/route-auth";
 import type { IdeaTypeOption, PartnerOption, TrackOption } from "@/lib/ui-data";
 
 type ReferenceData = {
@@ -11,7 +11,7 @@ type ReferenceData = {
 export const dynamic = "force-dynamic";
 export const preferredRegion = "hnd1";
 
-function jsonWithCookies(source: NextResponse, body: ReferenceData | { error: string }, init?: ResponseInit) {
+function jsonWithCookies(source: NextResponse, body: ReferenceData | { error: string; code?: string }, init?: ResponseInit) {
   const response = NextResponse.json(body, init);
   response.headers.set("Cache-Control", "no-store");
   for (const cookie of source.cookies.getAll()) {
@@ -23,12 +23,9 @@ function jsonWithCookies(source: NextResponse, body: ReferenceData | { error: st
 
 export async function GET(request: NextRequest) {
   const cookieResponse = NextResponse.next();
-  const supabase = createRouteClient(request, cookieResponse);
-
-  const userResult = await supabase.auth.getUser();
-  if (userResult.error || !userResult.data.user) {
-    return jsonWithCookies(cookieResponse, { error: "انتهت الجلسة. سجّل الدخول مرة أخرى." }, { status: 401 });
-  }
+  const auth = await requireActiveRouteProfile(request, cookieResponse);
+  if (!auth.ok) return jsonWithCookies(cookieResponse, { error: auth.error.message, code: auth.error.code }, { status: auth.error.status });
+  const { supabase } = auth;
 
   const [tracksResult, ideaTypesResult, partnersResult] = await Promise.all([
     supabase.from("tracks").select("id, name, color_hex").order("sort_order", { ascending: true }),

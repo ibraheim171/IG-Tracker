@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { Database, Tables } from "@/lib/database.types";
-import { createRouteClient } from "@/lib/supabase/route";
+import { requireActiveRouteProfile } from "@/lib/route-auth";
 
 type ItemRow = Tables<"items">;
 type ItemStatus = Database["public"]["Enums"]["item_status"];
@@ -39,7 +39,7 @@ const serverError = "تعذر تغيير المرحلة. حاول مجددًا. 
 
 export const dynamic = "force-dynamic";
 
-function jsonWithCookies(source: NextResponse, body: { item: ItemRow | null } | { error: string }, init?: ResponseInit) {
+function jsonWithCookies(source: NextResponse, body: { item: ItemRow | null } | { error: string; code?: string }, init?: ResponseInit) {
   const response = NextResponse.json(body, init);
   response.headers.set("Cache-Control", "no-store");
   for (const cookie of source.cookies.getAll()) {
@@ -92,11 +92,9 @@ export async function POST(request: NextRequest) {
     return jsonWithCookies(cookieResponse, { error: inputError }, { status: 400 });
   }
 
-  const supabase = createRouteClient(request, cookieResponse);
-  const userResult = await supabase.auth.getUser();
-  if (userResult.error || !userResult.data.user) {
-    return jsonWithCookies(cookieResponse, { error: authError }, { status: 401 });
-  }
+  const auth = await requireActiveRouteProfile(request, cookieResponse);
+  if (!auth.ok) return jsonWithCookies(cookieResponse, { error: auth.error.message, code: auth.error.code }, { status: auth.error.status });
+  const { supabase } = auth;
 
   try {
     const rpc = supabase.rpc.bind(supabase) as unknown as AdminStageRpc;

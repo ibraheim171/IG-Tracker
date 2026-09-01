@@ -81,8 +81,24 @@ export function isAuthorizedAdminProfile(profile: Pick<AdminProfile, "active" | 
   return Boolean(profile?.active && !profile.must_change_password && profile.roles.includes("admin"));
 }
 
-export function isProtectedProfileAllowed(profile: Pick<AdminProfile, "active"> | null | undefined) {
+export type ProtectedProfileIssueCode = "E_SESSION" | "E_ACCOUNT_DISABLED" | "PASSWORD_CHANGE_REQUIRED";
+
+export function getProtectedProfileIssue(
+  profile: Pick<AdminProfile, "active" | "must_change_password"> | null | undefined,
+  options: { allowPasswordChange?: boolean } = {},
+): ProtectedProfileIssueCode | null {
+  if (!profile) return "E_SESSION";
+  if (!profile.active) return "E_ACCOUNT_DISABLED";
+  if (profile.must_change_password && !options.allowPasswordChange) return "PASSWORD_CHANGE_REQUIRED";
+  return null;
+}
+
+export function isActiveProfileAllowed(profile: Pick<AdminProfile, "active"> | null | undefined) {
   return Boolean(profile?.active);
+}
+
+export function isProtectedProfileAllowed(profile: Pick<AdminProfile, "active" | "must_change_password"> | null | undefined) {
+  return getProtectedProfileIssue(profile) === null;
 }
 
 export function sanitizeAuditValues(values: AuditValues): AuditValues {

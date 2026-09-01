@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { Tables } from "@/lib/database.types";
-import { createRouteClient } from "@/lib/supabase/route";
+import { requireActiveRouteProfile } from "@/lib/route-auth";
 
 type ItemRow = Tables<"items">;
 type PerformanceRow = Tables<"v_item_performance">;
@@ -37,7 +37,7 @@ function itemDetailsError(code: string) {
   return `تعذر تحميل تفاصيل المادة. حاول مرة أخرى. رمز التشخيص: ${code}.`;
 }
 
-function jsonWithCookies(source: NextResponse, body: { details: DrawerDetails } | { error: string }, init?: ResponseInit) {
+function jsonWithCookies(source: NextResponse, body: { details: DrawerDetails } | { error: string; code?: string }, init?: ResponseInit) {
   const response = NextResponse.json(body, init);
   response.headers.set("Cache-Control", "no-store");
   for (const cookie of source.cookies.getAll()) {
@@ -49,17 +49,15 @@ function jsonWithCookies(source: NextResponse, body: { details: DrawerDetails } 
 
 export async function GET(request: NextRequest) {
   const cookieResponse = NextResponse.next();
-  const supabase = createRouteClient(request, cookieResponse);
   const itemId = request.nextUrl.searchParams.get("itemId");
 
   if (!itemId) {
     return jsonWithCookies(cookieResponse, { error: "معرّف المادة مطلوب." }, { status: 400 });
   }
 
-  const userResult = await supabase.auth.getUser();
-  if (userResult.error || !userResult.data.user) {
-    return jsonWithCookies(cookieResponse, { error: "انتهت الجلسة. سجّل الدخول مرة أخرى." }, { status: 401 });
-  }
+  const auth = await requireActiveRouteProfile(request, cookieResponse);
+  if (!auth.ok) return jsonWithCookies(cookieResponse, { error: auth.error.message, code: auth.error.code }, { status: auth.error.status });
+  const { supabase } = auth;
 
   try {
     const [itemResult, participantsResult, partnersResult, approvalsResult] = await Promise.all([

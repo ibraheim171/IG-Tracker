@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminClient, isSameOriginMutation, validatePassword } from "@/lib/admin-users-server";
-import { createRouteClient } from "@/lib/supabase/route";
+import { requireActiveRouteProfile } from "@/lib/route-auth";
 
 function responseWithCookies(body: object, status: number, source: NextResponse) {
   const response = NextResponse.json(body, { status });
@@ -16,14 +16,19 @@ export async function POST(request: NextRequest) {
     return responseWithCookies({ error: "كلمة المرور غير قوية بما يكفي.", code: "E_WEAK_PASSWORD" }, 400, sessionResponse);
   }
 
-  const supabase = createRouteClient(request, sessionResponse);
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return responseWithCookies({ error: "انتهت الجلسة. سجّل الدخول مرة أخرى.", code: "E_SESSION" }, 401, sessionResponse);
+  const auth = await requireActiveRouteProfile(request, sessionResponse, { allowPasswordChange: true });
+  if (!auth.ok) return responseWithCookies({ error: auth.error.message, code: auth.error.code }, auth.error.status, sessionResponse);
+  const { supabase, user } = auth;
 
   const { error: updateError } = await supabase.auth.updateUser({ password: body.password });
   if (updateError) return responseWithCookies({ error: "تعذر تغيير كلمة المرور.", code: "E_AUTH_PASSWORD" }, 400, sessionResponse);
 
-  const { error: profileError } = await adminClient().from("profiles").update({ must_change_password: false }).eq("id", user.id);
+  const { error: profileError } = await adminClient()
+    .from("profiles")
+    .update({ must_change_password: false })
+    .eq("id", user.id)
+    .select("id")
+    .single();
   if (profileError) return responseWithCookies({ error: "تم تغيير كلمة المرور، لكن تعذر تأكيدها. حاول مجدداً.", code: "E_PROFILE_PASSWORD_FLAG" }, 400, sessionResponse);
 
   return responseWithCookies({ ok: true }, 200, sessionResponse);
