@@ -1,10 +1,10 @@
 "use client";
 
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { createEmptyUserDraft, type PasswordMode } from "@/lib/admin-users-form";
 import { type AdminUser, allowedRoles, roleLabels, type Role } from "@/lib/admin-users";
 
 type ApiResponse = { error?: string; code?: string; user?: AdminUser; users?: AdminUser[]; temporaryPassword?: string; deleted?: boolean; id?: string; references?: { label: string; count: number }[] };
-type PasswordMode = "manual" | "generated";
 type EditingState = { user: AdminUser; displayName: string; email: string; roles: Role[]; active: boolean; reason: string };
 type PasswordState = { user: AdminUser; passwordMode: PasswordMode; temporaryPassword: string };
 type DeleteState = { user: AdminUser; reason: string; references?: { label: string; count: number }[] };
@@ -16,7 +16,7 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
   const [error, setError] = useState("");
   const [listError, setListError] = useState(initialError);
   const [saving, setSaving] = useState(false);
-  const [passwordMode, setPasswordMode] = useState<PasswordMode>("generated");
+  const [createDraft, setCreateDraft] = useState(createEmptyUserDraft);
   const [oneTimePassword, setOneTimePassword] = useState<{ email: string; password: string } | null>(null);
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [resetting, setResetting] = useState<PasswordState | null>(null);
@@ -40,21 +40,18 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
     event.preventDefault();
     if (saving) return;
     setError(""); setOneTimePassword(null); setSaving(true);
-    const form = new FormData(event.currentTarget);
-    const selectedRoles = allowedRoles.filter((role) => form.getAll("roles").includes(role));
     try {
       const result = await request("POST", {
-        email: String(form.get("email")),
-        displayName: String(form.get("displayName")),
-        roles: selectedRoles,
-        passwordMode,
-        temporaryPassword: String(form.get("temporaryPassword") ?? ""),
+        email: createDraft.email,
+        displayName: createDraft.displayName,
+        roles: createDraft.roles,
+        passwordMode: createDraft.passwordMode,
+        temporaryPassword: createDraft.temporaryPassword,
       });
       if (!result.user || !result.temporaryPassword) throw new Error("تعذر إنشاء المستخدم. [E_CREATE]");
       setUsers((current) => sortUsers([...current, result.user!]));
       setOneTimePassword({ email: result.user.email, password: result.temporaryPassword });
-      event.currentTarget.reset();
-      setPasswordMode("generated");
+      setCreateDraft(createEmptyUserDraft());
     } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "تعذر إنشاء المستخدم."); }
     finally { setSaving(false); }
   }
@@ -146,12 +143,12 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
       <h2>إضافة مستخدم</h2>
       <form className="stack" onSubmit={createUser}>
         <div className="form-grid">
-          <label className="field">الاسم الظاهر<input className="input" name="displayName" required /></label>
-          <label className="field">البريد الإلكتروني<input className="input" name="email" type="email" required /></label>
+          <label className="field">الاسم الظاهر<input className="input" name="displayName" value={createDraft.displayName} onChange={(event) => setCreateDraft((draft) => ({ ...draft, displayName: event.target.value }))} required /></label>
+          <label className="field">البريد الإلكتروني<input className="input" name="email" type="email" value={createDraft.email} onChange={(event) => setCreateDraft((draft) => ({ ...draft, email: event.target.value }))} required /></label>
         </div>
-        <RoleChecks selected={["writer"]} name="roles" />
-        <SegmentedPasswordMode value={passwordMode} onChange={setPasswordMode} />
-        {passwordMode === "manual" && <label className="field">كلمة مرور مؤقتة<input className="input num" name="temporaryPassword" type="password" autoComplete="new-password" minLength={12} required /></label>}
+        <RoleChecks selected={createDraft.roles} onChange={(roles) => setCreateDraft((draft) => ({ ...draft, roles }))} />
+        <SegmentedPasswordMode value={createDraft.passwordMode} onChange={(passwordMode) => setCreateDraft((draft) => ({ ...draft, passwordMode, temporaryPassword: passwordMode === "generated" ? "" : draft.temporaryPassword }))} />
+        {createDraft.passwordMode === "manual" && <label className="field">كلمة مرور مؤقتة<input className="input num" name="temporaryPassword" type="password" autoComplete="new-password" minLength={12} value={createDraft.temporaryPassword} onChange={(event) => setCreateDraft((draft) => ({ ...draft, temporaryPassword: event.target.value }))} required /></label>}
         <button className="button" disabled={saving}>{saving ? "جارٍ الحفظ" : "إنشاء الحساب"}</button>
       </form>
       {oneTimePassword && <OneTimePasswordBox email={oneTimePassword.email} password={oneTimePassword.password} onDismiss={() => setOneTimePassword(null)} />}
@@ -167,7 +164,7 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
       <label className="field">بحث<input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="الاسم أو البريد" /></label>
       {listError && <p className="error" role="alert">{listError}</p>}
       {!listError && filteredUsers.length === 0 && <p className="notice">لا توجد حسابات مطابقة.</p>}
-      {filteredUsers.length > 0 && <div className="table-wrap"><table className="users-table"><thead><tr><th>الاسم</th><th>البريد</th><th>الأدوار</th><th>الحالة</th><th>تاريخ الإنشاء</th><th>آخر دخول</th><th>إجراءات</th></tr></thead><tbody>{filteredUsers.map((user) => <tr key={user.id}><td>{user.display_name}</td><td className="num">{user.email || "—"}</td><td>{formatRoles(user.roles)}</td><td>{user.active ? "نشط" : "معطّل"}</td><td className="num">{formatDate(user.created_at)}</td><td className="num">{formatDate(user.last_sign_in_at)}</td><td><div className="actions-row"><button className="button button-secondary" type="button" disabled={saving} onClick={() => setEditing({ user, displayName: user.display_name, email: user.email, roles: user.roles, active: user.active, reason: "" })}>تعديل</button><button className="button button-secondary" type="button" disabled={saving} onClick={() => setResetting({ user, passwordMode: "generated", temporaryPassword: "" })}>كلمة المرور</button><button className="button button-danger" type="button" disabled={saving} onClick={() => setDeleting({ user, reason: "" })}>حذف</button></div></td></tr>)}</tbody></table></div>}
+      {filteredUsers.length > 0 && <div className="table-wrap"><table className="users-table"><thead><tr><th>الاسم</th><th>البريد</th><th>الأدوار</th><th>الحالة</th><th>تاريخ الإنشاء</th><th>آخر دخول</th><th>إجراءات</th></tr></thead><tbody>{filteredUsers.map((user) => <tr key={user.id}><td className="user-name-cell">{user.display_name}</td><td className="email-cell num">{user.email || "—"}</td><td className="roles-cell">{formatRoles(user.roles)}</td><td><span className={user.active ? "status-pill is-active" : "status-pill"}>{user.active ? "نشط" : "معطّل"}</span></td><DateCell value={user.created_at} /><DateCell value={user.last_sign_in_at} /><td className="actions-cell"><div className="user-actions"><button className="button button-secondary" type="button" disabled={saving} onClick={() => setEditing({ user, displayName: user.display_name, email: user.email, roles: user.roles, active: user.active, reason: "" })}>تعديل</button><button className="button button-secondary" type="button" disabled={saving} onClick={() => setResetting({ user, passwordMode: "generated", temporaryPassword: "" })}>كلمة المرور</button><button className="button button-danger" type="button" disabled={saving} onClick={() => setDeleting({ user, reason: "" })}>حذف</button></div></td></tr>)}</tbody></table></div>}
     </section>
 
     {editing && <Modal title="تعديل الحساب" onClose={() => setEditing(null)}>
@@ -218,9 +215,17 @@ function formatRoles(roles: Role[]) {
   return roles.map((role) => roleLabels[role]).join(" · ");
 }
 
-function formatDate(value: string | null) {
-  if (!value) return "—";
-  return new Date(value).toLocaleString("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+function DateCell({ value }: { value: string | null }) {
+  if (!value) return <td className="date-cell num">—</td>;
+  return <td className="date-cell num"><time dateTime={value}><span>{formatDatePart(value)}</span><span>{formatTimePart(value)}</span></time></td>;
+}
+
+function formatDatePart(value: string) {
+  return new Date(value).toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
+function formatTimePart(value: string) {
+  return new Date(value).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
 function RoleChecks({ selected, onChange, name }: { selected: Role[]; onChange?: (roles: Role[]) => void; name?: string }) {
