@@ -69,6 +69,14 @@ export type AdminUserStore = {
     beforeValues?: AuditValues;
     afterValues?: AuditValues;
   }): Promise<void>;
+  logAuditBatch(inputs: Array<{
+    actorId: string;
+    targetUserId: string;
+    operation: AdminAuditOperation;
+    reason?: string;
+    beforeValues?: AuditValues;
+    afterValues?: AuditValues;
+  }>): Promise<void>;
   setProfileMustChangePassword(id: string, mustChangePassword: boolean): Promise<AdminProfile>;
   toAdminUser(profile: AdminProfile, authUser?: AdminAuthUser | null): AdminUser;
   updateAuthEmail(id: string, email: string): Promise<AdminAuthUser>;
@@ -209,25 +217,35 @@ export async function updateAdminAccount(
   const nextActive = typeof input.active === "boolean" ? input.active : target.active;
   await store.assertNotLastActiveAdmin(target, nextRoles, nextActive);
 
+  const rollbackActions: Array<() => Promise<unknown>> = [];
+  const audits: Array<{ operation: AdminAuditOperation; beforeValues: AuditValues; afterValues: AuditValues; reason?: string }> = [];
   if (input.email) {
-    const duplicate = await store.findAuthUserByEmail(input.email);
-    if (duplicate && duplicate.id !== input.id) throw new AdminActionError("E_DUPLICATE_EMAIL");
-    await store.updateAuthEmail(input.id, input.email);
+    const currentAuthUser = await store.getAuthUserById(input.id);
+    const currentEmail = currentAuthUser?.email ? normalizeAdminEmail(currentAuthUser.email) : "";
+    const nextEmail = normalizeAdminEmail(input.email);
+    if (!currentEmail) throw new AdminActionError("E_AUTH_EMAIL");
+    if (nextEmail !== currentEmail) {
+      const duplicate = await store.findAuthUserByEmail(nextEmail);
+      if (duplicate && duplicate.id !== input.id) throw new AdminActionError("E_DUPLICATE_EMAIL");
+      await store.updateAuthEmail(input.id, nextEmail);
+      rollbackActions.push(() => store.updateAuthEmail(input.id, currentEmail));
+      audits.push({ operation: "update_email", beforeValues: { email: currentEmail }, afterValues: { email: nextEmail } });
+    }
   }
 
   const profileChanges: Partial<Pick<AdminProfile, "active" | "display_name" | "roles">> = {};
-  const audits: Array<{ operation: AdminAuditOperation; beforeValues: AuditValues; afterValues: AuditValues; reason?: string }> = [];
 
   if (input.displayName && input.displayName !== target.display_name) {
     profileChanges.display_name = input.displayName;
     audits.push({ operation: "update_display_name", beforeValues: { display_name: target.display_name }, afterValues: { display_name: input.displayName } });
   }
-  if (input.roles && JSON.stringify(input.roles) !== JSON.stringify(target.roles)) {
+  if (input.roles && !sameRoles(input.roles, target.roles)) {
     profileChanges.roles = input.roles;
     audits.push({ operation: "update_roles", beforeValues: { roles: target.roles }, afterValues: { roles: input.roles } });
   }
   if (typeof input.active === "boolean" && input.active !== target.active) {
     await store.updateAuthStatus(input.id, input.active);
+    rollbackActions.push(() => store.updateAuthStatus(input.id, target.active));
     profileChanges.active = input.active;
     audits.push({
       operation: input.active ? "activate_user" : "deactivate_user",
@@ -239,24 +257,50 @@ export async function updateAdminAccount(
 
   let profile = target;
   try {
-    if (Object.keys(profileChanges).length > 0) profile = await store.updateProfile(input.id, profileChanges);
-  } catch (caught) {
-    if (typeof input.active === "boolean" && input.active !== target.active) {
-      await settle(() => store.updateAuthStatus(input.id, target.active));
+    if (Object.keys(profileChanges).length > 0) {
+      profile = await store.updateProfile(input.id, profileChanges);
+      rollbackActions.push(() => store.updateProfile(input.id, {
+        active: target.active,
+        display_name: target.display_name,
+        roles: target.roles,
+      }));
     }
+  } catch (caught) {
+    await rollbackAll(rollbackActions);
     if (caught instanceof AdminActionError) throw caught;
     throw new AdminActionError("E_PROFILE_UPDATE");
   }
 
-  if (input.email) audits.push({ operation: "update_email", beforeValues: { email: input.previousEmail ?? "" }, afterValues: { email: input.email } });
-  for (const audit of audits) await store.logAudit({ actorId, targetUserId: input.id, ...audit });
+  try {
+    await store.logAuditBatch(audits.map((audit) => ({ actorId, targetUserId: input.id, ...audit })));
+  } catch (caught) {
+    await rollbackAll(rollbackActions);
+    if (caught instanceof AdminActionError) throw caught;
+    throw new AdminActionError("E_AUDIT_WRITE");
+  }
 
   const authUser = await store.getAuthUserById(input.id);
   return { user: store.toAdminUser(profile, authUser) };
 }
 
+function normalizeAdminEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+function sameRoles(a: Role[], b: Role[]) {
+  if (a.length !== b.length) return false;
+  const bSet = new Set(b);
+  return a.every((role) => bSet.has(role));
+}
+
 function safeProfileValues(profile: AdminProfile): AuditValues {
   return { display_name: profile.display_name, roles: profile.roles, active: profile.active, must_change_required: profile.must_change_password };
+}
+
+async function rollbackAll(actions: Array<() => Promise<unknown>>) {
+  for (const action of [...actions].reverse()) {
+    await settle(action);
+  }
 }
 
 async function settle(action: () => Promise<unknown>) {
