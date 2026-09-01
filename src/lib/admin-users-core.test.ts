@@ -13,6 +13,7 @@ import {
   sanitizeAuditValues,
   updateAdminAccount,
 } from "./admin-users-core.ts";
+import { createEmptyUserDraft } from "./admin-users-form.ts";
 import type { Role } from "./admin-users.ts";
 
 const actorId = "00000000-0000-0000-0000-000000000001";
@@ -202,6 +203,20 @@ test("active-status update rolls auth ban state back when profile update fails",
     },
   );
   assert.deepEqual(statuses, [false, true]);
+});
+
+test("create user form clears via state and does not call DOM reset after async submit", async () => {
+  const source = await readFile(new URL("../app/(protected)/admin/users/users-manager.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes(".reset("), false);
+  assert.match(source, /setCreateDraft\(createEmptyUserDraft\(\)\)/);
+  assert.deepEqual(createEmptyUserDraft(), {
+    displayName: "",
+    email: "",
+    roles: ["writer"],
+    passwordMode: "generated",
+    temporaryPassword: "",
+  });
 });
 
 function profile(overrides: Partial<AdminProfile> = {}): AdminProfile {
