@@ -216,6 +216,146 @@ test("active-status update rolls auth ban state back when profile update fails",
   assert.deepEqual(statuses, [false, true]);
 });
 
+test("matching email update is a no-op and ignores forged previousEmail", async () => {
+  const store = mockStore({
+    getAuthUserById: async (id) => {
+      store.calls.push(`getAuthUserById:${id}`);
+      return { id, email: "Target@Example.com" };
+    },
+  });
+
+  await updateAdminAccount(store, actorId, {
+    id: targetId,
+    email: " target@example.com ",
+    previousEmail: "forged@example.com",
+  });
+
+  assert.equal(store.calls.some((call) => call.startsWith("findAuthUserByEmail")), false);
+  assert.equal(store.calls.some((call) => call.startsWith("updateAuthEmail")), false);
+  assert.equal(store.calls.some((call) => call.includes("update_email")), false);
+});
+
+test("forged previousEmail does not affect email audit before values", async () => {
+  let authEmail = "real-before@example.com";
+  const auditRows: Array<{ actorId: string; targetUserId: string; operation: string; beforeValues?: unknown; afterValues?: unknown }> = [];
+  const store = mockStore({
+    getAuthUserById: async (id) => {
+      store.calls.push(`getAuthUserById:${id}`);
+      return { id, email: authEmail };
+    },
+    updateAuthEmail: async (id, email) => {
+      store.calls.push(`updateAuthEmail:${id}:${email}`);
+      authEmail = email;
+      return { id, email };
+    },
+    logAuditBatch: async (inputs) => {
+      auditRows.push(...inputs);
+    },
+  });
+
+  await updateAdminAccount(store, actorId, {
+    id: targetId,
+    email: "real-after@example.com",
+    previousEmail: "forged@example.com",
+  });
+
+  assert.equal(store.calls.filter((call) => call.startsWith("updateAuthEmail")).length, 1);
+  assert.deepEqual(auditRows, [{
+    actorId,
+    targetUserId: targetId,
+    operation: "update_email",
+    beforeValues: { email: "real-before@example.com" },
+    afterValues: { email: "real-after@example.com" },
+  }]);
+});
+
+test("real email change updates auth once and writes one email audit", async () => {
+  let authEmail = "old@example.com";
+  const auditOperations: string[] = [];
+  const store = mockStore({
+    getAuthUserById: async (id) => ({ id, email: authEmail }),
+    updateAuthEmail: async (id, email) => {
+      store.calls.push(`updateAuthEmail:${id}:${email}`);
+      authEmail = email;
+      return { id, email };
+    },
+    logAuditBatch: async (inputs) => {
+      auditOperations.push(...inputs.map((input) => input.operation));
+    },
+  });
+
+  await updateAdminAccount(store, actorId, { id: targetId, email: "new@example.com" });
+
+  assert.deepEqual(store.calls.filter((call) => call.startsWith("updateAuthEmail")), [`updateAuthEmail:${targetId}:new@example.com`]);
+  assert.deepEqual(auditOperations, ["update_email"]);
+});
+
+test("audit failure rolls changed auth email and profile back", async () => {
+  let authEmail = "before@example.com";
+  const profileWrites: Array<Partial<AdminProfile>> = [];
+  const store = mockStore({
+    getAuthUserById: async (id) => ({ id, email: authEmail }),
+    updateAuthEmail: async (id, email) => {
+      store.calls.push(`updateAuthEmail:${id}:${email}`);
+      authEmail = email;
+      return { id, email };
+    },
+    updateProfile: async (id, changes) => {
+      store.calls.push(`updateProfile:${id}:${Object.keys(changes).sort().join(",")}`);
+      profileWrites.push(changes);
+      return profile({ id, ...changes });
+    },
+    logAuditBatch: async () => {
+      throw new AdminActionError("E_AUDIT_WRITE");
+    },
+  });
+
+  await assert.rejects(
+    () => updateAdminAccount(store, actorId, { id: targetId, email: "after@example.com", displayName: "Changed Name" }),
+    (error: unknown) => {
+      assert.equal((error as AdminActionError).code, "E_AUDIT_WRITE");
+      return true;
+    },
+  );
+
+  assert.equal(authEmail, "before@example.com");
+  assert.deepEqual(profileWrites, [
+    { display_name: "Changed Name" },
+    { active: true, display_name: "Target User", roles: ["writer"] },
+  ]);
+});
+
+test("roles-only update does not create a fake email audit", async () => {
+  const auditOperations: string[] = [];
+  const store = mockStore({
+    logAuditBatch: async (inputs) => {
+      auditOperations.push(...inputs.map((input) => input.operation));
+    },
+  });
+
+  await updateAdminAccount(store, actorId, { id: targetId, roles: ["writer", "producer"] });
+
+  assert.deepEqual(auditOperations, ["update_roles"]);
+  assert.equal(store.calls.some((call) => call.startsWith("updateAuthEmail")), false);
+});
+
+test("display name roles and active no-op update writes no audit", async () => {
+  const store = mockStore({
+    getProfile: async (id) => profile({ id, display_name: "Target User", roles: ["writer", "producer"], active: true }),
+  });
+
+  await updateAdminAccount(store, actorId, {
+    id: targetId,
+    displayName: "Target User",
+    roles: ["producer", "writer"],
+    active: true,
+  });
+
+  assert.equal(store.calls.some((call) => call.startsWith("updateProfile")), false);
+  assert.equal(store.calls.some((call) => call.startsWith("updateAuthStatus")), false);
+  assert.equal(store.calls.some((call) => call.startsWith("logAudit")), false);
+});
+
 test("create user form clears via state and does not call DOM reset after async submit", async () => {
   const source = await readFile(new URL("../app/(protected)/admin/users/users-manager.tsx", import.meta.url), "utf8");
 
@@ -347,6 +487,9 @@ function mockStore(overrides: Partial<AdminUserStore> = {}): AdminUserStore & { 
     },
     logAudit: async (input) => {
       calls.push(`logAudit:${input.operation}:${input.targetUserId}`);
+    },
+    logAuditBatch: async (inputs) => {
+      if (inputs.length > 0) calls.push(`logAuditBatch:${inputs.map((input) => input.operation).join(",")}`);
     },
     setProfileMustChangePassword: async (id, mustChangePassword) => {
       calls.push(`setProfileMustChangePassword:${id}:${mustChangePassword}`);
