@@ -158,15 +158,27 @@ export async function logAdminAudit(input: {
   beforeValues?: AuditValues;
   afterValues?: AuditValues;
 }) {
-  const row = {
+  await logAdminAuditBatch([input]);
+}
+
+export async function logAdminAuditBatch(inputs: Array<{
+  actorId: string;
+  targetUserId: string;
+  operation: AdminAuditOperation;
+  reason?: string;
+  beforeValues?: AuditValues;
+  afterValues?: AuditValues;
+}>) {
+  if (inputs.length === 0) return;
+  const rows = inputs.map((input) => ({
     actor_id: input.actorId,
     target_user_id: input.targetUserId,
     operation: input.operation,
     reason: input.reason ? input.reason.trim() : null,
     before_values: input.beforeValues ?? {},
     after_values: input.afterValues ?? {},
-  };
-  const { error } = await adminUntypedClient().from("admin_account_audit").insert(row);
+  }));
+  const { error } = await adminUntypedClient().from("admin_account_audit").insert(rows);
   if (error) throw new Error("E_AUDIT_WRITE");
 }
 
@@ -210,6 +222,7 @@ export function adminUserStore(): AdminUserStore {
     getProfile,
     listDeletionReferences: getDeletionReferences,
     logAudit: logAdminAudit,
+    logAuditBatch: logAdminAuditBatch,
     async setProfileMustChangePassword(id, mustChangePassword) {
       const { data, error } = await service.from("profiles").update({ must_change_password: mustChangePassword }).eq("id", id).select().single();
       if (error || !data) throw new Error("E_PROFILE_PASSWORD_FLAG");
