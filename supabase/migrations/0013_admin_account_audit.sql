@@ -41,6 +41,111 @@ create policy admin_read_account_audit on public.admin_account_audit
   for select to authenticated
   using (public.is_admin());
 
+create or replace function public.is_active_user()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+      from public.profiles
+     where id = auth.uid()
+       and active
+  );
+$$;
+
+create policy active_user_guard on public.profiles
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.tracks
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.idea_types
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.partners
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.items
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.item_participants
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.item_partners
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.approvals
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.transitions
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.publishing_slots
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.reports
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.ai_drafts
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.ig_posts
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.ig_post_daily
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.ig_account_daily
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.ig_demographics
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.ig_link_candidates
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
+create policy active_user_guard on public.admin_account_audit
+  as restrictive for all to authenticated
+  using (public.is_active_user())
+  with check (public.is_active_user());
+
 create or replace function public.guard_last_active_admin()
 returns trigger
 language plpgsql
@@ -111,3 +216,5 @@ create trigger trg_profiles_self_sensitive_columns
 
 revoke execute on function public.guard_last_active_admin() from public, anon, authenticated;
 revoke execute on function public.guard_profile_self_sensitive_columns() from public, anon, authenticated;
+revoke execute on function public.is_active_user() from public, anon;
+grant execute on function public.is_active_user() to authenticated;
