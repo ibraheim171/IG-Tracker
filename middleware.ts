@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isProtectedProfileAllowed } from "@/lib/admin-users-core";
 import type { Database } from "@/lib/database.types";
 
 export async function middleware(request: NextRequest) {
@@ -9,7 +10,7 @@ export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   if (!user) return path === "/login" ? response : NextResponse.redirect(new URL("/login", request.url));
   const { data: profile } = await supabase.from("profiles").select("must_change_password, active").eq("id", user.id).single();
-  if (!profile?.active) { await supabase.auth.signOut(); return NextResponse.redirect(new URL("/login", request.url)); }
+  if (!profile || !isProtectedProfileAllowed(profile)) { await supabase.auth.signOut(); return NextResponse.redirect(new URL("/login", request.url)); }
   if (profile.must_change_password && path !== "/account/password" && path !== "/api/account/password") return NextResponse.redirect(new URL("/account/password", request.url));
   if (!profile.must_change_password && (path === "/login" || path === "/account/password")) return NextResponse.redirect(new URL("/health", request.url));
   return response;
