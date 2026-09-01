@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   AdminActionError,
@@ -7,6 +7,8 @@ import {
   type AdminUserStore,
   createAdminAccount,
   deleteAdminAccount,
+  getProtectedProfileIssue,
+  isActiveProfileAllowed,
   isAuthorizedAdminProfile,
   isProtectedProfileAllowed,
   resetAdminPassword,
@@ -27,9 +29,18 @@ test("authorization rejects non-admin, disabled admin, and must-change-password 
 });
 
 test("disabled profiles are rejected from protected app access even with an existing token", () => {
+  assert.equal(isActiveProfileAllowed(profile({ active: true, must_change_password: true })), true);
   assert.equal(isProtectedProfileAllowed(profile({ active: true })), true);
   assert.equal(isProtectedProfileAllowed(profile({ active: false })), false);
+  assert.equal(isProtectedProfileAllowed(profile({ active: true, must_change_password: true })), false);
   assert.equal(isProtectedProfileAllowed(null), false);
+});
+
+test("protected profile guard blocks must-change users from app pages but allows password page", () => {
+  assert.equal(getProtectedProfileIssue(profile({ must_change_password: true })), "PASSWORD_CHANGE_REQUIRED");
+  assert.equal(getProtectedProfileIssue(profile({ must_change_password: true }), { allowPasswordChange: true }), null);
+  assert.equal(getProtectedProfileIssue(profile({ active: false, must_change_password: true }), { allowPasswordChange: true }), "E_ACCOUNT_DISABLED");
+  assert.equal(getProtectedProfileIssue(profile({ must_change_password: false })), null);
 });
 
 test("deletion is blocked when business history exists", async () => {
@@ -219,6 +230,73 @@ test("create user form clears via state and does not call DOM reset after async 
   });
 });
 
+test("server pages and middleware enforce must-change without redirect loops", async () => {
+  const authSource = await readFile(new URL("auth.ts", import.meta.url), "utf8");
+  const middleware = await readFile(new URL("../../middleware.ts", import.meta.url), "utf8");
+  const protectedPasswordPageExists = await fileExists(new URL("../app/(protected)/account/password/page.tsx", import.meta.url));
+  const publicPasswordPageExists = await fileExists(new URL("../app/account/password/page.tsx", import.meta.url));
+
+  assert.match(authSource, /PASSWORD_CHANGE_REQUIRED[\s\S]*redirect\("\/account\/password"\)/);
+  assert.match(middleware, /passwordPath = "\/account\/password"/);
+  assert.match(middleware, /passwordApiPath = "\/api\/account\/password"/);
+  assert.match(middleware, /NextResponse\.json\(passwordRequiredBody, \{ status: 403 \}\)/);
+  assert.equal(protectedPasswordPageExists, false);
+  assert.equal(publicPasswordPageExists, true);
+});
+
+test("protected material APIs reject must-change sessions before loading data", async () => {
+  const itemDetails = await readFile(new URL("../app/api/item-details/route.ts", import.meta.url), "utf8");
+  const referenceData = await readFile(new URL("../app/api/reference-data/route.ts", import.meta.url), "utf8");
+  const adminStage = await readFile(new URL("../app/api/admin/change-item-stage/route.ts", import.meta.url), "utf8");
+  const routeAuth = await readFile(new URL("route-auth.ts", import.meta.url), "utf8");
+
+  for (const source of [itemDetails, referenceData, adminStage]) {
+    assert.match(source, /requireActiveRouteProfile\(request, cookieResponse\)/);
+    assert.match(source, /auth\.error\.code/);
+  }
+  assert.match(routeAuth, /PASSWORD_CHANGE_REQUIRED/);
+  assert.match(routeAuth, /select\("roles, active, must_change_password"\)/);
+});
+
+test("password change route clears the flag only after auth password update succeeds", async () => {
+  const source = await readFile(new URL("../app/api/account/password/route.ts", import.meta.url), "utf8");
+  const authUpdateIndex = source.indexOf("supabase.auth.updateUser({ password: body.password })");
+  const profileUpdateIndex = source.indexOf("update({ must_change_password: false })");
+
+  assert.notEqual(authUpdateIndex, -1);
+  assert.notEqual(profileUpdateIndex, -1);
+  assert.ok(authUpdateIndex < profileUpdateIndex);
+  assert.match(source, /allowPasswordChange: true/);
+  assert.match(source, /E_PROFILE_PASSWORD_FLAG/);
+  assert.equal(/console\.(log|error|warn)|logAudit|admin_account_audit/.test(source), false);
+});
+
+test("admin create and reset force password change without auditing passwords", async () => {
+  const serverSource = await readFile(new URL("admin-users-server.ts", import.meta.url), "utf8");
+  const coreSource = await readFile(new URL("admin-users-core.ts", import.meta.url), "utf8");
+  const createAuditBlock = coreSource.match(/operation: "create_user"[\s\S]*?afterValues: sanitizeAuditValues\(\{[\s\S]*?\}\),/)?.[0] ?? "";
+
+  assert.match(serverSource, /insert\(\{ id: input\.id, display_name: input\.displayName, roles: input\.roles, must_change_password: true, active: true \}\)/);
+  assert.match(coreSource, /setProfileMustChangePassword\(input\.id, true\)/);
+  assert.equal(/temporaryPassword|password/.test(createAuditBlock), false);
+});
+
+test("migration blocks must-change users at RLS and RPC layers", async () => {
+  const migrations = await readdir(new URL("../../supabase/migrations", import.meta.url));
+  const guardMigration = migrations.find((name) => name.endsWith("_must_change_password_app_guard.sql"));
+  assert.ok(guardMigration);
+  const source = await readFile(new URL(`../../supabase/migrations/${guardMigration}`, import.meta.url), "utf8");
+
+  assert.match(source, /create or replace function public\.can_use_app\(\)/);
+  assert.match(source, /and not must_change_password/);
+  assert.match(source, /create policy password_ready_user_guard on public\.items[\s\S]*as restrictive/);
+  assert.match(source, /create policy password_ready_user_guard on public\.item_partners[\s\S]*as restrictive/);
+  assert.match(source, /raise exception 'PASSWORD_CHANGE_REQUIRED:/);
+  for (const name of ["advance_item", "reject_item", "mark_published", "assign_slot", "admin_change_item_stage"]) {
+    assert.match(source, new RegExp(`create or replace function public\\.${name}[\\s\\S]*?perform public\\.assert_can_use_app\\(\\);`));
+  }
+});
+
 function profile(overrides: Partial<AdminProfile> = {}): AdminProfile {
   return {
     id: targetId,
@@ -300,4 +378,13 @@ function mockStore(overrides: Partial<AdminUserStore> = {}): AdminUserStore & { 
     },
   };
   return Object.assign(defaults, overrides, { calls });
+}
+
+async function fileExists(url: URL) {
+  try {
+    await readFile(url, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
 }
