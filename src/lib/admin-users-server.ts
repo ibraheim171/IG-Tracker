@@ -4,6 +4,7 @@ import { randomInt } from "crypto";
 import { createClient as createSupabaseClient, type User } from "@supabase/supabase-js";
 import type { NextRequest, NextResponse } from "next/server";
 import type { Database, Tables } from "@/lib/database.types";
+import { toAdminAuditRows, type AdminAuditInput } from "@/lib/admin-audit-rows";
 import { createRouteClient } from "@/lib/supabase/route";
 import { isAuthorizedAdminProfile, type AdminActionErrorCode, type AdminUserStore } from "@/lib/admin-users-core";
 import { type AdminAuditOperation, type AdminAuditPhase, type AdminUser, allowedRoles, type AuditValues, type Role } from "@/lib/admin-users";
@@ -164,29 +165,9 @@ export async function logAdminAudit(input: {
   await logAdminAuditBatch([input]);
 }
 
-export async function logAdminAuditBatch(inputs: Array<{
-  actorId: string;
-  targetUserId: string;
-  operation: AdminAuditOperation;
-  actionId?: string;
-  actionPhase?: AdminAuditPhase;
-  diagnosticCode?: AdminActionErrorCode;
-  reason?: string;
-  beforeValues?: AuditValues;
-  afterValues?: AuditValues;
-}>) {
+export async function logAdminAuditBatch(inputs: AdminAuditInput[]) {
   if (inputs.length === 0) return;
-  const rows = inputs.map((input) => ({
-    actor_id: input.actorId,
-    target_user_id: input.targetUserId,
-    operation: input.operation,
-    action_id: input.actionId,
-    action_phase: input.actionPhase,
-    diagnostic_code: input.diagnosticCode,
-    reason: input.reason ? input.reason.trim() : null,
-    before_values: input.beforeValues ?? {},
-    after_values: input.afterValues ?? {},
-  }));
+  const rows = toAdminAuditRows(inputs);
   const { error } = await adminUntypedClient().from("admin_account_audit").insert(rows);
   if (error) throw new Error("E_AUDIT_WRITE");
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
+import { toAdminAuditRows } from "./admin-audit-rows.ts";
 import {
   AdminActionError,
   type AdminProfile,
@@ -20,6 +21,7 @@ import type { Role } from "./admin-users.ts";
 
 const actorId = "00000000-0000-0000-0000-000000000001";
 const targetId = "00000000-0000-0000-0000-000000000002";
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 test("authorization rejects non-admin, disabled admin, and must-change-password admin", () => {
   assert.equal(isAuthorizedAdminProfile(profile({ roles: ["writer"] })), false);
@@ -212,6 +214,45 @@ test("audit values remove password, token, secret, and key fields recursively", 
   });
 
   assert.deepEqual(sanitized, { email: "safe@example.com", nested: { role: "writer" } });
+});
+
+test("create audit rows get a non-empty UUID action id and succeeded phase by default", () => {
+  const [row] = toAdminAuditRows([{
+    actorId,
+    targetUserId: targetId,
+    operation: "create_user",
+    afterValues: { email: "new@example.com" },
+  }]);
+
+  assert.match(row.action_id, uuidPattern);
+  assert.equal(row.action_phase, "succeeded");
+  assert.equal(row.diagnostic_code, null);
+});
+
+test("non-phased update audit rows get safe action defaults", () => {
+  const rows = toAdminAuditRows([
+    { actorId, targetUserId: targetId, operation: "update_display_name" },
+    { actorId, targetUserId: targetId, operation: "update_roles" },
+  ]);
+
+  for (const row of rows) {
+    assert.match(row.action_id, uuidPattern);
+    assert.equal(row.action_phase, "succeeded");
+    assert.equal(row.diagnostic_code, null);
+  }
+});
+
+test("explicit audit phases keep the supplied action id and diagnostic code", () => {
+  const actionId = "11111111-1111-4111-8111-111111111111";
+  const rows = toAdminAuditRows([
+    { actorId, targetUserId: targetId, operation: "delete_user", actionId, actionPhase: "started" },
+    { actorId, targetUserId: targetId, operation: "delete_user", actionId, actionPhase: "succeeded" },
+    { actorId, targetUserId: targetId, operation: "delete_user", actionId, actionPhase: "failed", diagnosticCode: "E_AUTH_DELETE" },
+  ]);
+
+  assert.deepEqual(rows.map((row) => row.action_id), [actionId, actionId, actionId]);
+  assert.deepEqual(rows.map((row) => row.action_phase), ["started", "succeeded", "failed"]);
+  assert.deepEqual(rows.map((row) => row.diagnostic_code), [null, null, "E_AUTH_DELETE"]);
 });
 
 test("create cleans up auth users when profile creation fails", async () => {
