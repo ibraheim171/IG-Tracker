@@ -68,6 +68,15 @@ test("assigned reviewer can approve or reject only, without field edits", () => 
   assert.equal(permissions.canAssignSlot, false);
 });
 
+test("participant row without the matching profile role grants no field or review power", () => {
+  const reviewerRowOnly = getItemPermissions(input(["writer"], ["reviewer"]));
+  assert.equal(reviewerRowOnly.canReview, false);
+  assert.deepEqual(reviewerRowOnly.editableFields, []);
+
+  const producerRowOnly = getItemPermissions(input(["writer"], ["producer"]));
+  assert.equal(producerRowOnly.editableFields.includes("production_file_url"), false);
+});
+
 test("publisher can manage partners, slots, and publishing only", () => {
   const permissions = getItemPermissions(input(["publisher"]));
   assert.equal(permissions.canManagePartners, true);
@@ -115,10 +124,16 @@ test("disabled users and password-change users are rejected", () => {
 test("database migration enforces trusted RPC and publisher-admin boundaries", () => {
   assert.match(migration, /alter type public\.role_name add value if not exists 'publisher'/);
   assert.match(migration, /add column if not exists writer_delivery_url text/);
-  assert.match(migration, /revoke update on table public\.items from anon, authenticated/);
+  assert.match(migration, /revoke insert, update, delete on table public\.items from public, anon, authenticated/);
+  assert.match(migration, /revoke insert, update, delete on table public\.item_participants from public, anon, authenticated/);
   assert.match(migration, /revoke insert, update, delete on table public\.partners from anon, authenticated/);
   assert.match(migration, /revoke insert, update, delete on table public\.item_partners from anon, authenticated/);
+  assert.match(migration, /drop policy if exists write_participants on public\.item_participants/);
   assert.match(migration, /create policy no_direct_item_update on public\.items[\s\S]*using \(false\)[\s\S]*with check \(false\)/);
+  assert.match(migration, /create policy no_direct_item_insert on public\.items[\s\S]*with check \(false\)/);
+  assert.match(migration, /create policy no_direct_item_participant_insert on public\.item_participants[\s\S]*with check \(false\)/);
+  assert.match(migration, /create policy no_direct_item_participant_update on public\.item_participants[\s\S]*using \(false\)[\s\S]*with check \(false\)/);
+  assert.match(migration, /create policy no_direct_item_participant_delete on public\.item_participants[\s\S]*using \(false\)/);
   assert.match(migration, /create or replace function public\.save_item_fields/);
   assert.match(migration, /FIELD_FORBIDDEN/);
   assert.match(migration, /create or replace function public\.save_item_partners/);
@@ -128,4 +143,39 @@ test("database migration enforces trusted RPC and publisher-admin boundaries", (
   assert.match(migration, /create or replace function public\.mark_published[\s\S]*public\.can_publish_items\(\)/);
   assert.match(migration, /create or replace function public\.ensure_can_advance_item/);
   assert.match(migration, /public\.assert_can_use_app\(\)/);
+});
+
+test("assigned writer cannot self-promote through item_participants Data API writes", () => {
+  assert.match(migration, /drop policy if exists write_participants on public\.item_participants/);
+  assert.match(migration, /create policy no_direct_item_participant_insert on public\.item_participants[\s\S]*with check \(false\)/);
+  assert.match(migration, /create policy no_direct_item_participant_update on public\.item_participants[\s\S]*using \(false\)[\s\S]*with check \(false\)/);
+  assert.match(migration, /create policy no_direct_item_participant_delete on public\.item_participants[\s\S]*using \(false\)/);
+  assert.match(migration, /revoke insert, update, delete on table public\.item_participants from public, anon, authenticated/);
+});
+
+test("database participant role checks require both assignment row and matching active profile role", () => {
+  assert.match(migration, /create or replace function public\.is_item_participant_part[\s\S]*profile\.active[\s\S]*not profile\.must_change_password/);
+  assert.match(migration, /p_part::text = any\(profile\.roles::text\[\]\)/);
+  assert.match(migration, /participant\.item_id = p_item[\s\S]*participant\.part = p_part/);
+  assert.match(migration, /join public\.profiles profile on profile\.id = participant\.user_id[\s\S]*'producer' = any\(profile\.roles::text\[\]\)/);
+});
+
+test("database create item path blocks sensitive insert fields and starts from idea", () => {
+  assert.match(migration, /create or replace function public\.create_item\(\s*p_fields jsonb\s*\)/);
+  assert.match(migration, /not \(public\.has_role_text\('writer'\) or public\.is_admin\(\)\)/);
+  assert.match(migration, /where not \(field = any\(array\['title', 'track_id', 'idea_type_id', 'caption', 'notes', 'writer_delivery_url'\]\)\)/);
+  const allowedBlock = migration.match(/where not \(field = any\(array\[[\s\S]*?\]\)\)/)?.[0] ?? "";
+  for (const field of ["status", "slot_id", "published_at", "ig_permalink", "ig_media_id", "production_file_url", "is_archived"]) {
+    assert.doesNotMatch(allowedBlock, new RegExp(field));
+  }
+  const insertBlock = migration.match(/insert into public\.items \([\s\S]*?\)\s*values/)?.[0] ?? "";
+  assert.doesNotMatch(insertBlock, /status|slot_id|published_at|ig_permalink|ig_media_id|production_file_url|is_archived/);
+  assert.match(migration, /if it\.status <> 'idea' then/);
+});
+
+test("reject item is limited to the matching review gate and stage", () => {
+  const rejectBlock = migration.match(/create or replace function public\.reject_item\([\s\S]*?\n\$\$;/)?.[0] ?? "";
+  assert.match(rejectBlock, /if p_gate = 'content' and it\.status <> 'writing' then[\s\S]*INVALID_REJECT_STAGE/);
+  assert.match(rejectBlock, /if p_gate = 'design' and it\.status <> 'in_production' then[\s\S]*INVALID_REJECT_STAGE/);
+  assert.ok(rejectBlock.indexOf("INVALID_REJECT_STAGE") < rejectBlock.indexOf("insert into public.approvals (item_id, gate, result, actor_id, note)"));
 });

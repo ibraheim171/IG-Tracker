@@ -1437,6 +1437,16 @@ export type Database = {
         }
       }
       content_gate_signatures: { Args: never; Returns: number }
+      create_item: {
+        Args: { p_fields: Json }
+        Returns: Database["public"]["Tables"]["items"]["Row"]
+        SetofOptions: {
+          from: "*"
+          to: "items"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       ensure_slots: { Args: { p_weeks?: number }; Returns: number }
       has_role: {
         Args: { p_role: Database["public"]["Enums"]["role_name"] }

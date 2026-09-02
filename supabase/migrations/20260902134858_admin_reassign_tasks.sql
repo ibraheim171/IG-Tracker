@@ -39,6 +39,7 @@ declare
   action_id uuid := gen_random_uuid();
   source_profile public.profiles%rowtype;
   target_profile public.profiles%rowtype;
+  locked_profile public.profiles%rowtype;
   selected_parts public.participant_part[];
   unsupported_parts text[];
   trimmed_reason text := btrim(coalesce(p_reason, ''));
@@ -65,19 +66,25 @@ begin
     raise exception 'INVALID_INPUT: العضو المصدر والمستهدف يجب أن يكونا مختلفين';
   end if;
 
-  select *
-    into source_profile
-    from public.profiles
-   where id = p_source;
+  perform pg_advisory_xact_lock(hashtext('admin_reassign_tasks'), hashtext(p_source::text));
+
+  for locked_profile in
+    select *
+      from public.profiles
+     where id in (p_source, p_target)
+     order by id
+     for update
+  loop
+    if locked_profile.id = p_source then
+      source_profile := locked_profile;
+    elsif locked_profile.id = p_target then
+      target_profile := locked_profile;
+    end if;
+  end loop;
 
   if source_profile.id is null then
     raise exception 'SOURCE_NOT_FOUND: العضو المصدر غير موجود';
   end if;
-
-  select *
-    into target_profile
-    from public.profiles
-   where id = p_target;
 
   if target_profile.id is null then
     raise exception 'TARGET_NOT_FOUND: العضو المستهدف غير موجود';
@@ -113,8 +120,6 @@ begin
       raise exception 'REASON_TOO_LONG: سبب النقل طويل جداً';
     end if;
   end if;
-
-  perform pg_advisory_xact_lock(hashtext('admin_reassign_tasks'), hashtext(p_source::text));
 
   with locked_assignments as (
     select ip.item_id, ip.part, i.status

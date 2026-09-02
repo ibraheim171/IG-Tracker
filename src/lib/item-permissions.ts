@@ -69,9 +69,9 @@ export function getItemPermissions(input: PermissionInput): ItemPermissions {
   const usable = input.profile.active && !input.profile.must_change_password && !input.item?.is_archived;
   const isAdmin = usable && hasRole(input.profile.roles, "admin");
   const isPublisher = usable && (isAdmin || hasRole(input.profile.roles, "publisher"));
-  const isWriter = usable && input.participantParts.includes("writer");
-  const isProducer = usable && input.participantParts.includes("producer");
-  const isReviewer = usable && input.participantParts.includes("reviewer");
+  const isWriter = usable && hasRole(input.profile.roles, "writer") && input.participantParts.includes("writer");
+  const isProducer = usable && hasRole(input.profile.roles, "producer") && input.participantParts.includes("producer");
+  const isReviewer = usable && hasRole(input.profile.roles, "reviewer") && input.participantParts.includes("reviewer");
 
   const editableFields = new Set<EditableItemField>();
   if (isAdmin) {

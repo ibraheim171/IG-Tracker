@@ -37,13 +37,17 @@ stable
 security definer
 set search_path = public
 as $$
-  select public.can_use_app()
-     and exists (
+  select exists (
        select 1
-         from public.item_participants
-        where item_id = p_item
-          and user_id = auth.uid()
-          and part = p_part
+         from public.profiles profile
+         join public.item_participants participant
+           on participant.user_id = profile.id
+        where profile.id = auth.uid()
+          and profile.active
+          and not profile.must_change_password
+          and p_part::text = any(profile.roles::text[])
+          and participant.item_id = p_item
+          and participant.part = p_part
      );
 $$;
 
@@ -124,9 +128,13 @@ begin
 
   if p_to = 'in_production' then
     select count(*) into n_producers
-      from public.item_participants
-     where item_id = p_item
-       and part = 'producer';
+      from public.item_participants participant
+      join public.profiles profile on profile.id = participant.user_id
+     where participant.item_id = p_item
+       and participant.part = 'producer'
+       and profile.active
+       and not profile.must_change_password
+       and 'producer' = any(profile.roles::text[]);
     if n_producers = 0 then
       v := array_append(v, 'لا إنتاج بلا مسؤول إنتاج معيّن');
     end if;
@@ -267,6 +275,81 @@ begin
          priority = case when p_fields ? 'priority' then nullif(p_fields ->> 'priority', '')::smallint else priority end
    where id = p_item
    returning * into it;
+
+  return it;
+end
+$$;
+
+create or replace function public.create_item(
+  p_fields jsonb
+) returns public.items
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  it public.items;
+  requested text[];
+  forbidden text[];
+begin
+  perform public.assert_can_use_app();
+
+  if not (public.has_role_text('writer') or public.is_admin()) then
+    raise exception 'ROLE_REQUIRED: إنشاء مادة يحتاج كاتباً أو أدمن';
+  end if;
+
+  if p_fields is null or jsonb_typeof(p_fields) <> 'object' then
+    raise exception 'INVALID_PAYLOAD: أرسل حقولاً صحيحة للإنشاء';
+  end if;
+
+  select coalesce(array_agg(key order by key), '{}')
+    into requested
+    from jsonb_object_keys(p_fields) as keys(key);
+
+  select coalesce(array_agg(field order by field), '{}')
+    into forbidden
+    from unnest(requested) as field
+   where not (field = any(array['title', 'track_id', 'idea_type_id', 'caption', 'notes', 'writer_delivery_url']));
+
+  if array_length(forbidden, 1) is not null then
+    raise exception 'FIELD_FORBIDDEN: %', array_to_string(forbidden, ', ');
+  end if;
+
+  if coalesce(btrim(p_fields ->> 'title'), '') = '' then
+    raise exception 'INVALID_PAYLOAD: العنوان مطلوب';
+  end if;
+
+  perform set_config('app.rpc', 'on', true);
+
+  insert into public.items (
+    title,
+    track_id,
+    idea_type_id,
+    caption,
+    notes,
+    writer_delivery_url,
+    created_by
+  )
+  values (
+    btrim(p_fields ->> 'title'),
+    case when p_fields ? 'track_id' then nullif(p_fields ->> 'track_id', '')::smallint else null end,
+    case when p_fields ? 'idea_type_id' then nullif(p_fields ->> 'idea_type_id', '')::smallint else null end,
+    case when p_fields ? 'caption' then nullif(btrim(coalesce(p_fields ->> 'caption', '')), '') else null end,
+    case when p_fields ? 'notes' then nullif(btrim(coalesce(p_fields ->> 'notes', '')), '') else null end,
+    case when p_fields ? 'writer_delivery_url' then nullif(btrim(coalesce(p_fields ->> 'writer_delivery_url', '')), '') else null end,
+    auth.uid()
+  )
+  returning * into it;
+
+  if public.has_role_text('writer') then
+    insert into public.item_participants (item_id, user_id, part, added_by)
+    values (it.id, auth.uid(), 'writer', auth.uid())
+    on conflict (item_id, user_id, part) do nothing;
+  end if;
+
+  if it.status <> 'idea' then
+    raise exception 'INVALID_DEFAULT: المادة الجديدة يجب أن تبدأ من الفكرة';
+  end if;
 
   return it;
 end
@@ -468,6 +551,14 @@ begin
     raise exception 'ROLE_REQUIRED: الإعادة تحتاج مراجعاً معيّناً على المادة';
   end if;
 
+  if p_gate = 'content' and it.status <> 'writing' then
+    raise exception 'INVALID_REJECT_STAGE: رفض المحتوى مسموح فقط في مرحلة اعتماد المحتوى';
+  end if;
+
+  if p_gate = 'design' and it.status <> 'in_production' then
+    raise exception 'INVALID_REJECT_STAGE: رفض التصميم مسموح فقط في مرحلة اعتماد التصميم';
+  end if;
+
   perform set_config('app.rpc', 'on', true);
 
   back := case p_gate when 'content' then 'writing'::public.item_status
@@ -588,9 +679,29 @@ end
 $$;
 
 drop policy if exists update_item on public.items;
+drop policy if exists insert_item on public.items;
+drop policy if exists no_direct_item_insert on public.items;
+drop policy if exists no_direct_item_update on public.items;
+drop policy if exists no_direct_item_delete on public.items;
+create policy no_direct_item_insert on public.items for insert to authenticated
+  with check (false);
 create policy no_direct_item_update on public.items for update to authenticated
   using (false)
   with check (false);
+create policy no_direct_item_delete on public.items for delete to authenticated
+  using (false);
+
+drop policy if exists write_participants on public.item_participants;
+drop policy if exists no_direct_item_participant_insert on public.item_participants;
+drop policy if exists no_direct_item_participant_update on public.item_participants;
+drop policy if exists no_direct_item_participant_delete on public.item_participants;
+create policy no_direct_item_participant_insert on public.item_participants for insert to authenticated
+  with check (false);
+create policy no_direct_item_participant_update on public.item_participants for update to authenticated
+  using (false)
+  with check (false);
+create policy no_direct_item_participant_delete on public.item_participants for delete to authenticated
+  using (false);
 
 drop policy if exists write_partners on public.item_partners;
 create policy write_partners on public.item_partners for all to authenticated
@@ -607,7 +718,8 @@ drop policy if exists add_partner on public.partners;
 create policy add_partner on public.partners for insert to authenticated
   with check (public.can_publish_items());
 
-revoke update on table public.items from anon, authenticated;
+revoke insert, update, delete on table public.items from public, anon, authenticated;
+revoke insert, update, delete on table public.item_participants from public, anon, authenticated;
 revoke insert, update, delete on table public.partners from anon, authenticated;
 revoke insert, update, delete on table public.item_partners from anon, authenticated;
 
@@ -615,6 +727,7 @@ revoke execute on function public.has_role_text(text) from public, anon;
 revoke execute on function public.is_item_participant_part(uuid, public.participant_part) from public, anon;
 revoke execute on function public.can_publish_items() from public, anon;
 revoke execute on function public.ensure_can_advance_item(uuid, public.item_status, public.item_status) from public, anon, authenticated;
+revoke execute on function public.create_item(jsonb) from public, anon, authenticated;
 revoke execute on function public.save_item_fields(uuid, jsonb) from public, anon, authenticated;
 revoke execute on function public.save_item_partners(uuid, smallint[], text) from public, anon, authenticated;
 revoke execute on function public.refresh_slot_state(uuid) from public, anon, authenticated;
@@ -626,6 +739,7 @@ revoke execute on function public.mark_published(uuid, text, timestamptz, text) 
 grant execute on function public.has_role_text(text) to authenticated;
 grant execute on function public.is_item_participant_part(uuid, public.participant_part) to authenticated;
 grant execute on function public.can_publish_items() to authenticated;
+grant execute on function public.create_item(jsonb) to authenticated;
 grant execute on function public.save_item_fields(uuid, jsonb) to authenticated;
 grant execute on function public.save_item_partners(uuid, smallint[], text) to authenticated;
 grant execute on function public.advance_item(uuid, public.item_status, text, text) to authenticated;

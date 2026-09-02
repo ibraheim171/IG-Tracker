@@ -49,6 +49,17 @@ test("database RPC checks actor, source, target, active target, and role compati
   assert.match(migration, /where not \(part::text = any\(target_profile\.roles::text\[\]\)\)/);
 });
 
+test("database RPC locks source and target profiles in a stable order before target checks", async () => {
+  const migration = await readFile(migrationUrl, "utf8");
+  const lockIndex = migration.indexOf("where id in (p_source, p_target)");
+  const targetActiveIndex = migration.indexOf("if not target_profile.active then");
+  const targetRoleIndex = migration.indexOf("where not (part::text = any(target_profile.roles::text[]))");
+  assert.ok(lockIndex > 0);
+  assert.match(migration, /order by id[\s\S]*for update/);
+  assert.ok(lockIndex < targetActiveIndex);
+  assert.ok(lockIndex < targetRoleIndex);
+});
+
 test("database RPC moves writer, producer, and reviewer assignments only", async () => {
   const migration = await readFile(migrationUrl, "utf8");
   assert.match(migration, /p_parts public\.participant_part\[\]/);
