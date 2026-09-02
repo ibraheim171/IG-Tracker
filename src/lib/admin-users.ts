@@ -33,4 +33,6 @@ export type AdminAuditOperation =
   | "reset_password"
   | "delete_user";
 
+export type AdminAuditPhase = "started" | "succeeded" | "failed";
+
 export type AuditValues = Record<string, Json>;

@@ -135,8 +135,7 @@ async function resetPassword(actorId: string, body: ResetPasswordBody, sessionRe
   const password = body.passwordMode === "generated" ? generatePassword() : body.temporaryPassword.trim();
   if (!validatePassword(password)) return jsonError("كلمة المرور المؤقتة غير قوية بما يكفي.", "E_WEAK_PASSWORD", 400, sessionResponse);
   const store = adminUserStore();
-  const target = await store.getProfile(body.id);
-  const result = await resetAdminPassword(store, actorId, { id: body.id, password, previousMustChangePassword: target.must_change_password });
+  const result = await resetAdminPassword(store, actorId, { id: body.id, password });
   return responseWithCookies(result, 200, sessionResponse);
 }
 

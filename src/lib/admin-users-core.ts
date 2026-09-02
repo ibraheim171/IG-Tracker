@@ -1,4 +1,4 @@
-import type { AdminAuditOperation, AdminUser, AuditValues, Role } from "./admin-users";
+import type { AdminAuditOperation, AdminAuditPhase, AdminUser, AuditValues, Role } from "./admin-users";
 
 export type AdminProfile = {
   id: string;
@@ -65,6 +65,9 @@ export type AdminUserStore = {
     actorId: string;
     targetUserId: string;
     operation: AdminAuditOperation;
+    actionId?: string;
+    actionPhase?: AdminAuditPhase;
+    diagnosticCode?: AdminActionErrorCode;
     reason?: string;
     beforeValues?: AuditValues;
     afterValues?: AuditValues;
@@ -73,6 +76,9 @@ export type AdminUserStore = {
     actorId: string;
     targetUserId: string;
     operation: AdminAuditOperation;
+    actionId?: string;
+    actionPhase?: AdminAuditPhase;
+    diagnosticCode?: AdminActionErrorCode;
     reason?: string;
     beforeValues?: AuditValues;
     afterValues?: AuditValues;
@@ -161,37 +167,98 @@ export async function deleteAdminAccount(store: AdminUserStore, actorId: string,
   await store.assertNotLastActiveAdmin(target, [], false);
   const references = await store.listDeletionReferences(input.id);
   if (references.length > 0) throw new AdminActionError("E_HAS_HISTORY", { references });
-  await store.deleteAuthUser(input.id);
+  const actionId = createAuditActionId();
+  const beforeValues = sanitizeAuditValues(safeProfileValues(target));
   await store.logAudit({
     actorId,
     targetUserId: input.id,
     operation: "delete_user",
+    actionId,
+    actionPhase: "started",
     reason: input.reason,
-    beforeValues: sanitizeAuditValues(safeProfileValues(target)),
+    beforeValues,
   });
+  try {
+    await store.deleteAuthUser(input.id);
+  } catch (caught) {
+    await settle(() => store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "delete_user",
+      actionId,
+      actionPhase: "failed",
+      diagnosticCode: "E_AUTH_DELETE",
+      reason: input.reason,
+      beforeValues,
+    }));
+    throw toAdminActionError(caught, "E_AUTH_DELETE");
+  }
+  try {
+    await store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "delete_user",
+      actionId,
+      actionPhase: "succeeded",
+      reason: input.reason,
+      beforeValues,
+    });
+  } catch {
+    return { deleted: true, id: input.id, auditPending: true };
+  }
   return { deleted: true, id: input.id };
 }
 
 export async function resetAdminPassword(
   store: AdminUserStore,
   actorId: string,
-  input: { id: string; password: string; previousMustChangePassword: boolean },
+  input: { id: string; password: string },
 ) {
-  await store.setProfileMustChangePassword(input.id, true);
-  try {
-    await store.updateAuthPassword(input.id, input.password);
-  } catch (caught) {
-    await settle(() => store.setProfileMustChangePassword(input.id, input.previousMustChangePassword));
-    if (caught instanceof AdminActionError) throw caught;
-    throw new AdminActionError("E_AUTH_PASSWORD");
-  }
+  const target = await store.getProfile(input.id);
+  const actionId = createAuditActionId();
+  const beforeValues = { must_change_required: target.must_change_password };
+  const afterValues = { must_change_required: true };
   await store.logAudit({
     actorId,
     targetUserId: input.id,
     operation: "reset_password",
-    beforeValues: { must_change_required: input.previousMustChangePassword },
-    afterValues: { must_change_required: true },
+    actionId,
+    actionPhase: "started",
+    beforeValues,
+    afterValues,
   });
+  try {
+    await store.setProfileMustChangePassword(input.id, true);
+    await store.updateAuthPassword(input.id, input.password);
+  } catch (caught) {
+    const error = toAdminActionError(caught, caught instanceof AdminActionError && caught.code === "E_PROFILE_PASSWORD_FLAG" ? "E_PROFILE_PASSWORD_FLAG" : "E_AUTH_PASSWORD");
+    await settle(() => store.setProfileMustChangePassword(input.id, target.must_change_password));
+    await settle(() => store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "reset_password",
+      actionId,
+      actionPhase: "failed",
+      diagnosticCode: error.code,
+      beforeValues,
+      afterValues,
+    }));
+    throw error;
+  }
+  try {
+    await store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "reset_password",
+      actionId,
+      actionPhase: "succeeded",
+      beforeValues,
+      afterValues,
+    });
+  } catch {
+    const [profile, authUser] = await Promise.all([store.getProfile(input.id), store.getAuthUserById(input.id)]);
+    return { user: store.toAdminUser(profile, authUser), temporaryPassword: input.password, auditPending: true };
+  }
   const [profile, authUser] = await Promise.all([store.getProfile(input.id), store.getAuthUserById(input.id)]);
   return { user: store.toAdminUser(profile, authUser), temporaryPassword: input.password };
 }
@@ -309,6 +376,10 @@ function sameRoles(a: Role[], b: Role[]) {
   if (a.length !== b.length) return false;
   const bSet = new Set(b);
   return a.every((role) => bSet.has(role));
+}
+
+function createAuditActionId() {
+  return globalThis.crypto.randomUUID();
 }
 
 function toAdminActionError(caught: unknown, fallback: AdminActionErrorCode) {

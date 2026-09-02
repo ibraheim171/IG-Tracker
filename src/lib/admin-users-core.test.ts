@@ -73,9 +73,75 @@ test("deletion is allowed for an account without business history and audit hist
     `getProfile:${targetId}`,
     `guard:${targetId}:false`,
     `listDeletionReferences:${targetId}`,
+    `logAudit:delete_user:started:${targetId}`,
     `deleteAuthUser:${targetId}`,
-    `logAudit:delete_user:${targetId}`,
+    `logAudit:delete_user:succeeded:${targetId}`,
   ]);
+});
+
+test("delete started audit failure prevents auth deletion", async () => {
+  const store = mockStore({
+    logAudit: async (input) => {
+      if (input.actionPhase === "started") throw new AdminActionError("E_AUDIT_WRITE");
+    },
+  });
+
+  await assert.rejects(
+    () => deleteAdminAccount(store, actorId, { id: targetId, reason: "cancel duplicate" }),
+    (error: unknown) => {
+      assert.equal((error as AdminActionError).code, "E_AUDIT_WRITE");
+      return true;
+    },
+  );
+  assert.equal(store.calls.some((call) => call.startsWith("deleteAuthUser")), false);
+});
+
+test("delete auth failure writes failed audit and preserves original code", async () => {
+  const auditRows: Array<{ actionId?: string; actionPhase?: string; diagnosticCode?: string; reason?: string; beforeValues?: unknown }> = [];
+  const store = mockStore({
+    deleteAuthUser: async () => { throw new AdminActionError("E_AUTH_DELETE"); },
+    logAudit: async (input) => { auditRows.push(input); },
+  });
+
+  await assert.rejects(
+    () => deleteAdminAccount(store, actorId, { id: targetId, reason: "cancel duplicate" }),
+    (error: unknown) => {
+      assert.equal((error as AdminActionError).code, "E_AUTH_DELETE");
+      return true;
+    },
+  );
+
+  assert.deepEqual(auditRows.map((row) => row.actionPhase), ["started", "failed"]);
+  assert.equal(auditRows[0]?.actionId, auditRows[1]?.actionId);
+  assert.equal(auditRows[1]?.diagnosticCode, "E_AUTH_DELETE");
+});
+
+test("delete success writes started then succeeded with one action id and safe before values", async () => {
+  const auditRows: Array<{ actionId?: string; actionPhase?: string; reason?: string; beforeValues?: unknown }> = [];
+  const store = mockStore({
+    logAudit: async (input) => { auditRows.push(input); },
+  });
+
+  const result = await deleteAdminAccount(store, actorId, { id: targetId, reason: "cancel duplicate" });
+
+  assert.deepEqual(result, { deleted: true, id: targetId });
+  assert.deepEqual(auditRows.map((row) => row.actionPhase), ["started", "succeeded"]);
+  assert.equal(auditRows[0]?.actionId, auditRows[1]?.actionId);
+  assert.equal(auditRows[0]?.reason, "cancel duplicate");
+  assert.deepEqual(auditRows[0]?.beforeValues, { display_name: "Target User", roles: ["writer"], active: true, must_change_required: false });
+});
+
+test("delete succeeded audit failure returns deleted with pending audit", async () => {
+  const store = mockStore({
+    logAudit: async (input) => {
+      if (input.actionPhase === "succeeded") throw new AdminActionError("E_AUDIT_WRITE");
+    },
+  });
+
+  const result = await deleteAdminAccount(store, actorId, { id: targetId, reason: "cancel duplicate" });
+
+  assert.deepEqual(result, { deleted: true, id: targetId, auditPending: true });
+  assert.equal(store.calls.includes(`deleteAuthUser:${targetId}`), true);
 });
 
 test("last-active-admin guard serializes concurrent destructive requests", async () => {
@@ -181,7 +247,50 @@ test("create cleans up profile and auth user when audit write fails", async () =
 
 test("password reset rolls profile flag back when auth password update fails", async () => {
   const flags: boolean[] = [];
+  const auditRows: Array<{ actionPhase?: string; diagnosticCode?: string }> = [];
   const store = mockStore({
+    setProfileMustChangePassword: async (id, flag) => {
+      flags.push(flag);
+      return profile({ id, must_change_password: flag });
+    },
+    updateAuthPassword: async () => { throw new AdminActionError("E_AUTH_PASSWORD"); },
+    logAudit: async (input) => { auditRows.push(input); },
+  });
+
+  await assert.rejects(
+    () => resetAdminPassword(store, actorId, { id: targetId, password: "NewSecret123!" }),
+    (error: unknown) => {
+      assert.equal((error as AdminActionError).code, "E_AUTH_PASSWORD");
+      return true;
+    },
+  );
+  assert.deepEqual(flags, [true, false]);
+  assert.deepEqual(auditRows.map((row) => row.actionPhase), ["started", "failed"]);
+  assert.equal(auditRows[1]?.diagnosticCode, "E_AUTH_PASSWORD");
+});
+
+test("reset password started audit failure prevents profile and auth mutations", async () => {
+  const store = mockStore({
+    logAudit: async (input) => {
+      if (input.actionPhase === "started") throw new AdminActionError("E_AUDIT_WRITE");
+    },
+  });
+
+  await assert.rejects(
+    () => resetAdminPassword(store, actorId, { id: targetId, password: "NewSecret123!" }),
+    (error: unknown) => {
+      assert.equal((error as AdminActionError).code, "E_AUDIT_WRITE");
+      return true;
+    },
+  );
+  assert.equal(store.calls.some((call) => call.startsWith("setProfileMustChangePassword")), false);
+  assert.equal(store.calls.some((call) => call.startsWith("updateAuthPassword")), false);
+});
+
+test("reset password uses current profile flag instead of client-provided previous value", async () => {
+  const flags: boolean[] = [];
+  const store = mockStore({
+    getProfile: async (id) => profile({ id, must_change_password: true }),
     setProfileMustChangePassword: async (id, flag) => {
       flags.push(flag);
       return profile({ id, must_change_password: flag });
@@ -189,14 +298,50 @@ test("password reset rolls profile flag back when auth password update fails", a
     updateAuthPassword: async () => { throw new AdminActionError("E_AUTH_PASSWORD"); },
   });
 
-  await assert.rejects(
-    () => resetAdminPassword(store, actorId, { id: targetId, password: "NewSecret123!", previousMustChangePassword: false }),
-    (error: unknown) => {
-      assert.equal((error as AdminActionError).code, "E_AUTH_PASSWORD");
-      return true;
+  await assert.rejects(() => resetAdminPassword(store, actorId, { id: targetId, password: "NewSecret123!" }));
+
+  assert.deepEqual(flags, [true, true]);
+});
+
+test("reset password success writes started and succeeded with one action id", async () => {
+  const auditRows: Array<{ actionId?: string; actionPhase?: string; beforeValues?: unknown; afterValues?: unknown }> = [];
+  const store = mockStore({
+    logAudit: async (input) => { auditRows.push(input); },
+  });
+
+  const result = await resetAdminPassword(store, actorId, { id: targetId, password: "NewSecret123!" });
+
+  assert.equal(result.temporaryPassword, "NewSecret123!");
+  assert.deepEqual(auditRows.map((row) => row.actionPhase), ["started", "succeeded"]);
+  assert.equal(auditRows[0]?.actionId, auditRows[1]?.actionId);
+  assert.deepEqual(auditRows[0]?.beforeValues, { must_change_required: false });
+  assert.deepEqual(auditRows[1]?.afterValues, { must_change_required: true });
+});
+
+test("reset password succeeded audit failure returns password once with pending audit", async () => {
+  const store = mockStore({
+    logAudit: async (input) => {
+      if (input.actionPhase === "succeeded") throw new AdminActionError("E_AUDIT_WRITE");
     },
-  );
-  assert.deepEqual(flags, [true, false]);
+  });
+
+  const result = await resetAdminPassword(store, actorId, { id: targetId, password: "NewSecret123!" });
+
+  assert.equal(result.temporaryPassword, "NewSecret123!");
+  assert.equal(result.auditPending, true);
+  assert.equal(store.calls.filter((call) => call.startsWith("updateAuthPassword")).length, 1);
+  assert.equal(store.calls.filter((call) => call === `setProfileMustChangePassword:${targetId}:false`).length, 0);
+});
+
+test("reset password audit payloads do not contain the temporary password", async () => {
+  const auditRows: unknown[] = [];
+  const store = mockStore({
+    logAudit: async (input) => { auditRows.push(input); },
+  });
+
+  await resetAdminPassword(store, actorId, { id: targetId, password: "NewSecret123!" });
+
+  assert.equal(JSON.stringify(auditRows).includes("NewSecret123!"), false);
 });
 
 test("active-status update rolls auth ban state back when profile update fails", async () => {
@@ -471,6 +616,22 @@ test("migration blocks must-change users at RLS and RPC layers", async () => {
   }
 });
 
+test("audit phase migration keeps existing rows succeeded and grants append-only access", async () => {
+  const migrations = await readdir(new URL("../../supabase/migrations", import.meta.url));
+  const phaseMigration = migrations.find((name) => name.endsWith("_admin_audit_action_phases.sql"));
+  assert.ok(phaseMigration);
+  const source = await readFile(new URL(`../../supabase/migrations/${phaseMigration}`, import.meta.url), "utf8");
+
+  assert.match(source, /add column action_id uuid not null default gen_random_uuid\(\)/);
+  assert.match(source, /add column action_phase text not null default 'succeeded'/);
+  assert.match(source, /action_phase in \('started', 'succeeded', 'failed'\)/);
+  assert.match(source, /diagnostic_code ~ '\^E_\[A-Z0-9_\]\{1,61\}\$'/);
+  assert.match(source, /create index ix_admin_account_audit_action on public\.admin_account_audit \(action_id, created_at\)/);
+  assert.match(source, /revoke update, delete on table public\.admin_account_audit from public, anon, authenticated, service_role/);
+  assert.equal(/\bgrant\b[\s\S]*\b(anon|authenticated|public)\b/i.test(source), false);
+  assert.equal(/password|token|secret|key/i.test(source.replace(/diagnostic_code/g, "")), false);
+});
+
 function profile(overrides: Partial<AdminProfile> = {}): AdminProfile {
   return {
     id: targetId,
@@ -520,7 +681,7 @@ function mockStore(overrides: Partial<AdminUserStore> = {}): AdminUserStore & { 
       return [];
     },
     logAudit: async (input) => {
-      calls.push(`logAudit:${input.operation}:${input.targetUserId}`);
+      calls.push(`logAudit:${input.operation}:${input.actionPhase ?? "default"}:${input.targetUserId}`);
     },
     logAuditBatch: async (inputs) => {
       if (inputs.length > 0) calls.push(`logAuditBatch:${inputs.map((input) => input.operation).join(",")}`);

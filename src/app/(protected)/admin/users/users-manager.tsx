@@ -4,7 +4,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "reac
 import { createEmptyUserDraft, type PasswordMode } from "@/lib/admin-users-form";
 import { type AdminUser, allowedRoles, roleLabels, type Role } from "@/lib/admin-users";
 
-type ApiResponse = { error?: string; code?: string; user?: AdminUser; users?: AdminUser[]; temporaryPassword?: string; deleted?: boolean; id?: string; references?: { label: string; count: number }[] };
+type ApiResponse = { error?: string; code?: string; user?: AdminUser; users?: AdminUser[]; temporaryPassword?: string; deleted?: boolean; id?: string; auditPending?: boolean; references?: { label: string; count: number }[] };
 type EditingState = { user: AdminUser; displayName: string; email: string; roles: Role[]; active: boolean; reason: string };
 type PasswordState = { user: AdminUser; passwordMode: PasswordMode; temporaryPassword: string };
 type DeleteState = { user: AdminUser; reason: string; references?: { label: string; count: number }[] };
@@ -98,6 +98,7 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
       if (!result.user || !result.temporaryPassword) throw new Error("تعذر إعادة ضبط كلمة المرور. [E_PASSWORD_RESET]");
       setUsers((current) => current.map((user) => user.id === result.user!.id ? result.user! : user));
       setOneTimePassword({ email: result.user.email, password: result.temporaryPassword });
+      if (result.auditPending) setError("تم تغيير كلمة المرور، لكن سجل التدقيق ما زال قيد المتابعة. لا تعِد العملية لنفس الحساب. [E_AUDIT_PENDING]");
       setResetting(null); setConfirm(null);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "تعذر إعادة ضبط كلمة المرور."); }
     finally { setSaving(false); }
@@ -114,6 +115,7 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
       }
       if (!result.deleted) throw new Error("تعذر حذف المستخدم. [E_DELETE]");
       setUsers((current) => current.filter((user) => user.id !== deleting.user.id));
+      if (result.auditPending) setError("تم حذف الحساب، لكن سجل التدقيق ما زال قيد المتابعة. [E_AUDIT_PENDING]");
       setDeleting(null); setConfirm(null);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "تعذر حذف المستخدم."); }
     finally { setSaving(false); }
