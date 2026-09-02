@@ -217,8 +217,8 @@ export async function updateAdminAccount(
   const nextActive = typeof input.active === "boolean" ? input.active : target.active;
   await store.assertNotLastActiveAdmin(target, nextRoles, nextActive);
 
-  const rollbackActions: Array<() => Promise<unknown>> = [];
   const audits: Array<{ operation: AdminAuditOperation; beforeValues: AuditValues; afterValues: AuditValues; reason?: string }> = [];
+  let emailChange: { currentEmail: string; nextEmail: string } | null = null;
   if (input.email) {
     const currentAuthUser = await store.getAuthUserById(input.id);
     const currentEmail = currentAuthUser?.email ? normalizeAdminEmail(currentAuthUser.email) : "";
@@ -227,8 +227,7 @@ export async function updateAdminAccount(
     if (nextEmail !== currentEmail) {
       const duplicate = await store.findAuthUserByEmail(nextEmail);
       if (duplicate && duplicate.id !== input.id) throw new AdminActionError("E_DUPLICATE_EMAIL");
-      await store.updateAuthEmail(input.id, nextEmail);
-      rollbackActions.push(() => store.updateAuthEmail(input.id, currentEmail));
+      emailChange = { currentEmail, nextEmail };
       audits.push({ operation: "update_email", beforeValues: { email: currentEmail }, afterValues: { email: nextEmail } });
     }
   }
@@ -244,8 +243,6 @@ export async function updateAdminAccount(
     audits.push({ operation: "update_roles", beforeValues: { roles: target.roles }, afterValues: { roles: input.roles } });
   }
   if (typeof input.active === "boolean" && input.active !== target.active) {
-    await store.updateAuthStatus(input.id, input.active);
-    rollbackActions.push(() => store.updateAuthStatus(input.id, target.active));
     profileChanges.active = input.active;
     audits.push({
       operation: input.active ? "activate_user" : "deactivate_user",
@@ -256,27 +253,48 @@ export async function updateAdminAccount(
   }
 
   let profile = target;
+  const rollbackActions: Array<() => Promise<unknown>> = [];
   try {
+    if (emailChange) {
+      try {
+        await store.updateAuthEmail(input.id, emailChange.nextEmail);
+        rollbackActions.push(() => store.updateAuthEmail(input.id, emailChange.currentEmail));
+      } catch (caught) {
+        throw toAdminActionError(caught, "E_AUTH_EMAIL");
+      }
+    }
+
+    if (typeof input.active === "boolean" && input.active !== target.active) {
+      try {
+        await store.updateAuthStatus(input.id, input.active);
+        rollbackActions.push(() => store.updateAuthStatus(input.id, target.active));
+      } catch (caught) {
+        throw toAdminActionError(caught, "E_AUTH_STATUS");
+      }
+    }
+
     if (Object.keys(profileChanges).length > 0) {
-      profile = await store.updateProfile(input.id, profileChanges);
-      rollbackActions.push(() => store.updateProfile(input.id, {
-        active: target.active,
-        display_name: target.display_name,
-        roles: target.roles,
-      }));
+      try {
+        profile = await store.updateProfile(input.id, profileChanges);
+        rollbackActions.push(() => store.updateProfile(input.id, {
+          active: target.active,
+          display_name: target.display_name,
+          roles: target.roles,
+        }));
+      } catch (caught) {
+        throw toAdminActionError(caught, "E_PROFILE_UPDATE");
+      }
+    }
+
+    try {
+      await store.logAuditBatch(audits.map((audit) => ({ actorId, targetUserId: input.id, ...audit })));
+    } catch (caught) {
+      throw toAdminActionError(caught, "E_AUDIT_WRITE");
     }
   } catch (caught) {
     await rollbackAll(rollbackActions);
     if (caught instanceof AdminActionError) throw caught;
     throw new AdminActionError("E_PROFILE_UPDATE");
-  }
-
-  try {
-    await store.logAuditBatch(audits.map((audit) => ({ actorId, targetUserId: input.id, ...audit })));
-  } catch (caught) {
-    await rollbackAll(rollbackActions);
-    if (caught instanceof AdminActionError) throw caught;
-    throw new AdminActionError("E_AUDIT_WRITE");
   }
 
   const authUser = await store.getAuthUserById(input.id);
@@ -291,6 +309,35 @@ function sameRoles(a: Role[], b: Role[]) {
   if (a.length !== b.length) return false;
   const bSet = new Set(b);
   return a.every((role) => bSet.has(role));
+}
+
+function toAdminActionError(caught: unknown, fallback: AdminActionErrorCode) {
+  if (caught instanceof AdminActionError) return caught;
+  if (caught instanceof Error && isAdminActionErrorCode(caught.message)) return new AdminActionError(caught.message);
+  return new AdminActionError(fallback);
+}
+
+function isAdminActionErrorCode(value: string): value is AdminActionErrorCode {
+  return [
+    "E_AUTH_CREATE",
+    "E_AUTH_DELETE",
+    "E_AUTH_EMAIL",
+    "E_AUTH_LIST",
+    "E_AUTH_PASSWORD",
+    "E_AUTH_STATUS",
+    "E_AUDIT_WRITE",
+    "E_DUPLICATE_EMAIL",
+    "E_HAS_HISTORY",
+    "E_LAST_ADMIN",
+    "E_PROFILE_CREATE",
+    "E_PROFILE_NOT_FOUND",
+    "E_PROFILE_PASSWORD_FLAG",
+    "E_PROFILE_UPDATE",
+    "E_SELF_DELETE",
+    "E_SELF_DEMOTE",
+    "E_SELF_DISABLE",
+    "E_WEAK_PASSWORD",
+  ].includes(value);
 }
 
 function safeProfileValues(profile: AdminProfile): AuditValues {

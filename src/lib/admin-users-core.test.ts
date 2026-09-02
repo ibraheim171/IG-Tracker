@@ -216,6 +216,40 @@ test("active-status update rolls auth ban state back when profile update fails",
   assert.deepEqual(statuses, [false, true]);
 });
 
+test("email change rolls back when a later auth status update fails", async () => {
+  let authEmail = "before@example.com";
+  const statuses: boolean[] = [];
+  const store = mockStore({
+    getAuthUserById: async (id) => ({ id, email: authEmail }),
+    updateAuthEmail: async (id, email) => {
+      store.calls.push(`updateAuthEmail:${id}:${email}`);
+      authEmail = email;
+      return { id, email };
+    },
+    updateAuthStatus: async (_id, active) => {
+      statuses.push(active);
+      throw new AdminActionError("E_AUTH_STATUS");
+    },
+  });
+
+  await assert.rejects(
+    () => updateAdminAccount(store, actorId, { id: targetId, email: "after@example.com", active: false, reason: "offboarded" }),
+    (error: unknown) => {
+      assert.equal((error as AdminActionError).code, "E_AUTH_STATUS");
+      return true;
+    },
+  );
+
+  assert.equal(authEmail, "before@example.com");
+  assert.deepEqual(statuses, [false]);
+  assert.deepEqual(store.calls.filter((call) => call.startsWith("updateAuthEmail")), [
+    `updateAuthEmail:${targetId}:after@example.com`,
+    `updateAuthEmail:${targetId}:before@example.com`,
+  ]);
+  assert.equal(store.calls.some((call) => call.startsWith("updateProfile")), false);
+  assert.equal(store.calls.some((call) => call.startsWith("logAudit")), false);
+});
+
 test("matching email update is a no-op and ignores forged previousEmail", async () => {
   const store = mockStore({
     getAuthUserById: async (id) => {
