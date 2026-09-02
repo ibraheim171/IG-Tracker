@@ -251,6 +251,7 @@ export function safeError(caught: unknown) {
     if (caught.message === "E_SELF_DISABLE") return { message: "لا يمكن للأدمن تعطيل حسابه.", code: "E_SELF_DISABLE", status: 409 };
     if (caught.message === "E_AUTH_CREATE") return { message: "تعذر إنشاء المستخدم.", code: "E_AUTH_CREATE", status: 400 };
     if (caught.message === "E_PROFILE_CREATE") return { message: "تعذر إنشاء ملف المستخدم.", code: "E_PROFILE_CREATE", status: 400 };
+    if (caught.message === "E_PROFILE_DELETE") return { message: "تعذر تنظيف ملف المستخدم.", code: "E_PROFILE_DELETE", status: 400 };
     if (caught.message === "E_AUDIT_WRITE") return { message: "تعذر تسجيل العملية.", code: "E_AUDIT_WRITE", status: 400 };
     if (caught.message === "E_AUTH_DELETE") return { message: "تعذر حذف المستخدم.", code: "E_AUTH_DELETE", status: 400 };
     if (caught.message === "E_AUTH_EMAIL") return { message: "تعذر تغيير البريد.", code: "E_AUTH_EMAIL", status: 400 };

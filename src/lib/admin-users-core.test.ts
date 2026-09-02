@@ -77,6 +77,7 @@ test("deletion is allowed for an account without business history and audit hist
     `listDeletionReferences:${targetId}`,
     `logAudit:delete_user:started:${targetId}`,
     `deleteAuthUser:${targetId}`,
+    `deleteProfile:${targetId}`,
     `logAudit:delete_user:succeeded:${targetId}`,
   ]);
 });
@@ -116,12 +117,19 @@ test("delete auth failure writes failed audit and preserves original code", asyn
   assert.deepEqual(auditRows.map((row) => row.actionPhase), ["started", "failed"]);
   assert.equal(auditRows[0]?.actionId, auditRows[1]?.actionId);
   assert.equal(auditRows[1]?.diagnosticCode, "E_AUTH_DELETE");
+  assert.equal(store.calls.some((call) => call.startsWith("deleteProfile")), false);
 });
 
-test("delete success writes started then succeeded with one action id and safe before values", async () => {
+test("delete success removes auth and profile before writing succeeded audit", async () => {
   const auditRows: Array<{ actionId?: string; actionPhase?: string; reason?: string; beforeValues?: unknown }> = [];
+  const operations: string[] = [];
   const store = mockStore({
-    logAudit: async (input) => { auditRows.push(input); },
+    deleteAuthUser: async () => { operations.push("deleteAuthUser"); },
+    deleteProfile: async () => { operations.push("deleteProfile"); },
+    logAudit: async (input) => {
+      auditRows.push(input);
+      operations.push(`logAudit:${input.actionPhase}`);
+    },
   });
 
   const result = await deleteAdminAccount(store, actorId, { id: targetId, reason: "cancel duplicate" });
@@ -131,6 +139,34 @@ test("delete success writes started then succeeded with one action id and safe b
   assert.equal(auditRows[0]?.actionId, auditRows[1]?.actionId);
   assert.equal(auditRows[0]?.reason, "cancel duplicate");
   assert.deepEqual(auditRows[0]?.beforeValues, { display_name: "Target User", roles: ["writer"], active: true, must_change_required: false });
+  assert.deepEqual(operations, ["logAudit:started", "deleteAuthUser", "deleteProfile", "logAudit:succeeded"]);
+});
+
+test("delete profile cleanup tolerates an already-cascaded profile row", async () => {
+  const source = await readFile(new URL("admin-users-server.ts", import.meta.url), "utf8");
+
+  assert.match(source, /from\("profiles"\)\.delete\(\)\.eq\("id", id\)/);
+  assert.equal(/from\("profiles"\)\.delete\(\)\.eq\("id", id\)[\s\S]{0,80}\.single\(\)/.test(source), false);
+});
+
+test("delete profile cleanup failure after auth delete writes failed audit and returns partial state", async () => {
+  const auditRows: Array<{ actionPhase?: string; diagnosticCode?: string; actionId?: string; reason?: string; beforeValues?: unknown }> = [];
+  const store = mockStore({
+    deleteProfile: async () => { throw new AdminActionError("E_PROFILE_DELETE"); },
+    logAudit: async (input) => { auditRows.push(input); },
+  });
+
+  const result = await deleteAdminAccount(store, actorId, { id: targetId, reason: "cancel duplicate" });
+
+  assert.deepEqual(result, { deleted: false, id: targetId, authDeleted: true, profileCleanupPending: true });
+  assert.deepEqual(auditRows.map((row) => row.actionPhase), ["started", "failed"]);
+  assert.equal(auditRows[0]?.actionId, auditRows[1]?.actionId);
+  assert.equal(auditRows[1]?.diagnosticCode, "E_PROFILE_DELETE");
+  assert.equal(auditRows[1]?.reason, "cancel duplicate");
+  assert.deepEqual(auditRows[1]?.beforeValues, { display_name: "Target User", roles: ["writer"], active: true, must_change_required: false });
+  assert.equal(auditRows.some((row) => row.actionPhase === "succeeded"), false);
+  assert.equal(JSON.stringify(auditRows).includes("password"), false);
+  assert.equal(JSON.stringify(auditRows).includes("token"), false);
 });
 
 test("delete succeeded audit failure returns deleted with pending audit", async () => {
@@ -144,6 +180,7 @@ test("delete succeeded audit failure returns deleted with pending audit", async 
 
   assert.deepEqual(result, { deleted: true, id: targetId, auditPending: true });
   assert.equal(store.calls.includes(`deleteAuthUser:${targetId}`), true);
+  assert.equal(store.calls.includes(`deleteProfile:${targetId}`), true);
 });
 
 test("last-active-admin guard serializes concurrent destructive requests", async () => {

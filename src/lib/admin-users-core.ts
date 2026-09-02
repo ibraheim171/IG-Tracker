@@ -29,6 +29,7 @@ export type AdminActionErrorCode =
   | "E_HAS_HISTORY"
   | "E_LAST_ADMIN"
   | "E_PROFILE_CREATE"
+  | "E_PROFILE_DELETE"
   | "E_PROFILE_NOT_FOUND"
   | "E_PROFILE_PASSWORD_FLAG"
   | "E_PROFILE_UPDATE"
@@ -192,6 +193,21 @@ export async function deleteAdminAccount(store: AdminUserStore, actorId: string,
       beforeValues,
     }));
     throw toAdminActionError(caught, "E_AUTH_DELETE");
+  }
+  try {
+    await store.deleteProfile(input.id);
+  } catch {
+    await settle(() => store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "delete_user",
+      actionId,
+      actionPhase: "failed",
+      diagnosticCode: "E_PROFILE_DELETE",
+      reason: input.reason,
+      beforeValues,
+    }));
+    return { deleted: false, id: input.id, authDeleted: true, profileCleanupPending: true };
   }
   try {
     await store.logAudit({
@@ -401,6 +417,7 @@ function isAdminActionErrorCode(value: string): value is AdminActionErrorCode {
     "E_HAS_HISTORY",
     "E_LAST_ADMIN",
     "E_PROFILE_CREATE",
+    "E_PROFILE_DELETE",
     "E_PROFILE_NOT_FOUND",
     "E_PROFILE_PASSWORD_FLAG",
     "E_PROFILE_UPDATE",

@@ -4,7 +4,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "reac
 import { createEmptyUserDraft, type PasswordMode } from "@/lib/admin-users-form";
 import { type AdminUser, allowedRoles, roleLabels, type Role } from "@/lib/admin-users";
 
-type ApiResponse = { error?: string; code?: string; user?: AdminUser; users?: AdminUser[]; temporaryPassword?: string; deleted?: boolean; id?: string; auditPending?: boolean; references?: { label: string; count: number }[] };
+type ApiResponse = { error?: string; code?: string; user?: AdminUser; users?: AdminUser[]; temporaryPassword?: string; deleted?: boolean; id?: string; auditPending?: boolean; authDeleted?: boolean; profileCleanupPending?: boolean; references?: { label: string; count: number }[] };
 type EditingState = { user: AdminUser; displayName: string; email: string; roles: Role[]; active: boolean; reason: string };
 type PasswordState = { user: AdminUser; passwordMode: PasswordMode; temporaryPassword: string };
 type DeleteState = { user: AdminUser; reason: string; references?: { label: string; count: number }[] };
@@ -112,6 +112,10 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
       if (result.references?.length) {
         setDeleting({ ...deleting, references: result.references });
         throw new Error("لا يمكن حذف حساب له سجل تاريخي. عطّله بدلًا من ذلك. [E_HAS_HISTORY]");
+      }
+      if (result.authDeleted && result.profileCleanupPending) {
+        setError("تم حذف حساب Auth، لكن تنظيف profile لم يكتمل. لا تعِد العملية قبل مراجعة السجل. [E_PROFILE_DELETE]");
+        return;
       }
       if (!result.deleted) throw new Error("تعذر حذف المستخدم. [E_DELETE]");
       setUsers((current) => current.filter((user) => user.id !== deleting.user.id));
