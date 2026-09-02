@@ -25,4 +25,4 @@ alter table public.admin_account_audit
 
 create index ix_admin_account_audit_action on public.admin_account_audit (action_id, created_at);
 
-revoke update, delete on table public.admin_account_audit from public, anon, authenticated, service_role;
+revoke update, delete, truncate on table public.admin_account_audit from public, anon, authenticated, service_role;

@@ -627,7 +627,7 @@ test("audit phase migration keeps existing rows succeeded and grants append-only
   assert.match(source, /action_phase in \('started', 'succeeded', 'failed'\)/);
   assert.match(source, /diagnostic_code ~ '\^E_\[A-Z0-9_\]\{1,61\}\$'/);
   assert.match(source, /create index ix_admin_account_audit_action on public\.admin_account_audit \(action_id, created_at\)/);
-  assert.match(source, /revoke update, delete on table public\.admin_account_audit from public, anon, authenticated, service_role/);
+  assert.match(source, /revoke update, delete, truncate on table public\.admin_account_audit from public, anon, authenticated, service_role/);
   assert.equal(/\bgrant\b[\s\S]*\b(anon|authenticated|public)\b/i.test(source), false);
   assert.equal(/password|token|secret|key/i.test(source.replace(/diagnostic_code/g, "")), false);
 });
