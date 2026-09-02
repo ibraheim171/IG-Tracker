@@ -32,7 +32,8 @@ export type AdminAuditOperation =
   | "activate_user"
   | "deactivate_user"
   | "reset_password"
-  | "delete_user";
+  | "delete_user"
+  | "reassign_tasks";
 
 export type AdminAuditPhase = "started" | "succeeded" | "failed";
 

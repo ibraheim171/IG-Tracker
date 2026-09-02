@@ -250,7 +250,7 @@ fieldset { border: 1px solid var(--rule); border-radius: 0.5rem; padding: 0.75re
 h1, h2 { font-family: var(--font-heading), sans-serif; }
 .users-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
 .users-toolbar h2 { margin: 0; }
-.users-table { min-inline-size: 58rem; table-layout: fixed; }
+.users-table { min-inline-size: 62rem; table-layout: fixed; }
 .users-table th,
 .users-table td { min-inline-size: 0; }
 .users-table th:nth-child(1),
@@ -266,15 +266,20 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .users-table th:nth-child(6),
 .users-table td:nth-child(6) { inline-size: 8.5rem; }
 .users-table th:nth-child(7),
-.users-table td:nth-child(7) { inline-size: 15rem; }
+.users-table td:nth-child(7) { inline-size: 18rem; }
 .user-name-cell,
 .roles-cell { overflow-wrap: anywhere; line-height: 1.55; }
 .email-cell { direction: ltr; unicode-bidi: plaintext; overflow-wrap: anywhere; line-height: 1.45; }
 .date-cell { white-space: nowrap; direction: ltr; unicode-bidi: isolate; }
 .date-cell time { display: grid; justify-items: start; gap: 0.15rem; line-height: 1.25; }
 .actions-cell { white-space: normal; }
-.user-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem; align-items: stretch; }
+.user-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.45rem; align-items: stretch; }
 .user-actions .button { min-inline-size: 0; padding-inline: 0.55rem; white-space: normal; line-height: 1.25; }
+.reassign-grid { display: grid; gap: 0.75rem; }
+.reassign-counts { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.preview-table { table-layout: fixed; }
+.preview-table th,
+.preview-table td { padding: 0.55rem; }
 .status-pill { display: inline-flex; align-items: center; justify-content: center; min-block-size: 2rem; border: 1px solid var(--rule); border-radius: 999px; padding-inline: 0.65rem; color: var(--accent); font-weight: 800; white-space: nowrap; }
 .status-pill.is-active { color: var(--track-basira); border-color: color-mix(in srgb, var(--track-basira) 45%, var(--rule)); }
 .toggle-row { display: inline-flex; align-items: center; gap: 0.45rem; min-block-size: 44px; }
@@ -475,6 +480,7 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
   .confirm-panel { align-self: center; margin-block-end: 0; }
   .item-row { grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; }
   .meta-grid, .form-grid, .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reassign-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .drawer-partner-checks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 

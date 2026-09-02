@@ -1489,6 +1489,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      admin_reassign_tasks: {
+        Args: {
+          p_dry_run?: boolean
+          p_parts: Database["public"]["Enums"]["participant_part"][]
+          p_reason?: string | null
+          p_source: string
+          p_target: string
+        }
+        Returns: Json
+      }
       save_item_fields: {
         Args: { p_fields: Json; p_item: string }
         Returns: Database["public"]["Tables"]["items"]["Row"]
