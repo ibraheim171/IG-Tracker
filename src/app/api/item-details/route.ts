@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
     const item = itemResult.data;
     const currentSlotId = item.slot_id;
     const shouldLoadPerformance = item.status === "published";
-    const shouldLoadOpenSlots = item.status !== "published" && !currentSlotId;
+    const shouldLoadOpenSlots = item.status !== "published";
 
     const [performanceResult, slotsResult, currentSlotResult] = await Promise.all([
       shouldLoadPerformance

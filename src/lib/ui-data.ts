@@ -160,13 +160,18 @@ export function extractMessage(error: unknown) {
 }
 
 export function parseRuleMessage(message: string) {
-  const marker = "RULE_VIOLATION:";
-  const index = message.indexOf(marker);
-  if (index >= 0) {
-    const ruleMessage = message.slice(index + marker.length).trim();
-    if (ruleMessage) return ruleMessage;
+  for (const marker of ["RULE_VIOLATION:", "ROLE_REQUIRED:", "FORBIDDEN:", "FIELD_FORBIDDEN:", "INVALID_PAYLOAD:"]) {
+    const index = message.indexOf(marker);
+    if (index >= 0) {
+      const ruleMessage = message.slice(index + marker.length).trim();
+      if (ruleMessage) return ruleMessage;
+    }
   }
   return "تعذر تنفيذ العملية. حاول مجددًا. رمز التشخيص: RPC_ERROR.";
+}
+
+export function isPublisherRole(roles: RoleName[]) {
+  return roles.includes("publisher") || roles.includes("admin");
 }
 
 export function isReviewerRole(roles: RoleName[]) {

@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition, type CSSProperties } from "react";
 import { ItemDrawer } from "@/components/item-drawer";
+import { isPublisherRole } from "@/lib/item-permissions";
 import { createClient } from "@/lib/supabase/client";
 import type { DrawerPreview, ReadyItem, RoleName } from "@/lib/ui-data";
 import { extractMessage, formatHebronDateTime, isAdminRole, parseRuleMessage } from "@/lib/ui-data";
@@ -44,6 +45,7 @@ export function ReadyList({ initialItems, currentUserId, roles }: Props) {
   const [blocked, setBlocked] = useState(false);
   const [isPending, startTransition] = useTransition();
   const isAdmin = isAdminRole(roles);
+  const canPublish = isPublisherRole(roles);
   const linkLooksValid = /^https:\/\/www\.instagram\.com\/(p|reel|tv)\/[^/?#]+/.test(permalink.trim());
   const openItem = useMemo(() => {
     const item = items.find((candidate) => candidate.id === openItemId);
@@ -92,16 +94,17 @@ export function ReadyList({ initialItems, currentUserId, roles }: Props) {
               <div className="read-box">{item.caption || "—"}</div>
               <div className="actions-row">
                 <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(item.caption ?? "")}>نسخ الكابشن</button>
-                {item.production_file_url ? <a className="button button-secondary" href={item.production_file_url} target="_blank" rel="noreferrer">فتح ملف الإنتاج</a> : null}
+                {item.production_file_url ? <a className="button button-secondary" href={item.production_file_url} target="_blank" rel="noopener noreferrer">فتح ملف الإنتاج</a> : null}
+                {item.production_file_url ? <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(item.production_file_url ?? "")}>نسخ رابط الإنتاج</button> : null}
                 <button className="button button-secondary" type="button" onClick={() => setOpenItemId(item.id)}>فتح البطاقة</button>
-                {isAdmin ? <button className="button" type="button" onClick={() => setPublishItem(item)}>تم النشر</button> : null}
+                {canPublish ? <button className="button" type="button" onClick={() => setPublishItem(item)}>تم النشر</button> : null}
               </div>
             </article>
           ))}
         </div>
       ) : <section className="card"><p>لا توجد مواد جاهزة للنشر.</p></section>}
 
-      {isAdmin && publishItem ? (
+      {canPublish && publishItem ? (
         <div className="veil" onClick={() => setPublishItem(null)}>
           <form className="confirm-panel stack" onSubmit={(event) => { event.preventDefault(); startTransition(() => { void publish(); }); }} onClick={(event) => event.stopPropagation()}>
             <h2>تأكيد النشر</h2>

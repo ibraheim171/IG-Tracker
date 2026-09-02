@@ -3,12 +3,13 @@ import type { Database, Json, Tables } from "@/lib/database.types";
 export type Role = Database["public"]["Enums"]["role_name"];
 export type Profile = Tables<"profiles">;
 
-export const allowedRoles: Role[] = ["writer", "reviewer", "producer", "admin"];
+export const allowedRoles: Role[] = ["writer", "reviewer", "producer", "publisher", "admin"];
 
 export const roleLabels: Record<Role, string> = {
   writer: "كاتب",
   reviewer: "مراجع",
   producer: "منتج",
+  publisher: "مسؤول النشر",
   admin: "أدمن",
 };
 

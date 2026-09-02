@@ -1,7 +1,7 @@
 {
   "name": "ig-tracker",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "start": "next start", "lint": "eslint .", "test:admin-users": "node --test src/lib/admin-users-core.test.ts" },
+  "scripts": { "dev": "next dev", "build": "next build", "start": "next start", "lint": "eslint .", "test:admin-users": "node --test src/lib/admin-users-core.test.ts", "test:item-permissions": "node --test src/lib/item-permissions.test.ts" },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",
     "@supabase/supabase-js": "^2.57.0",

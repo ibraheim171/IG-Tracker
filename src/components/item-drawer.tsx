@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { AdminStageControl, type AdminStageCurrentSlot } from "@/components/admin-stage-control";
 import { useReferenceData } from "@/components/reference-data-provider";
+import { type EditableItemField, getItemPermissions } from "@/lib/item-permissions";
 import { createClient } from "@/lib/supabase/client";
-import type { Tables, TablesInsert, TablesUpdate } from "@/lib/database.types";
+import type { Tables } from "@/lib/database.types";
 import type { DrawerPreview, IdeaTypeOption, ItemStatus, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
-import { extractMessage, formatHebronDateTime, formatNumber, formatPercent, isAdminRole, isReviewerRole, parseRuleMessage, statusLabels } from "@/lib/ui-data";
+import { extractMessage, formatHebronDateTime, formatNumber, formatPercent, isAdminRole, parseRuleMessage, statusLabels } from "@/lib/ui-data";
 
 type ItemRow = Tables<"items">;
 type PerformanceRow = Tables<"v_item_performance">;
@@ -46,6 +47,7 @@ type EditableState = {
   idea_type_id: string;
   caption: string;
   notes: string;
+  writer_delivery_url: string;
   production_file_url: string;
   partnerIds: string[];
   newPartner: string;
@@ -78,10 +80,9 @@ const pipeline: { key: ItemStatus; label: string }[] = [
 const order: ItemStatus[] = ["idea", "writing", "content_approved", "in_production", "design_approved", "ready", "published"];
 const detailTimeoutMs = 10000;
 const autoSaveDelayMs = 1800;
-const itemFieldKeys: (keyof EditableState)[] = ["title", "track_id", "idea_type_id", "caption", "notes", "production_file_url"];
+const itemFieldKeys: EditableItemField[] = ["title", "track_id", "idea_type_id", "caption", "notes", "writer_delivery_url", "production_file_url"];
+const itemFieldKeySet = new Set<EditableItemField>(itemFieldKeys);
 const itemSaveErrorMessage = "تعذر حفظ التعديلات. حاول مجددًا. رمز التشخيص: ITEM_SAVE.";
-const partnerCreateErrorMessage = "تعذر إضافة الشريك. حاول مجددًا. رمز التشخيص: PARTNER_CREATE.";
-const partnersClearErrorMessage = "تعذر تحديث الشركاء. حاول مجددًا. رمز التشخيص: PARTNERS_CLEAR.";
 const partnersSaveErrorMessage = "تعذر حفظ الشركاء. حاول مجددًا. رمز التشخيص: PARTNERS_SAVE.";
 
 function profileName(value: ParticipantRecord["profiles"]) {
@@ -109,40 +110,50 @@ function buildEditable(item: ItemRow, partnerRows: PartnerRecord[]): EditableSta
     idea_type_id: item.idea_type_id?.toString() ?? "",
     caption: item.caption ?? "",
     notes: item.notes ?? "",
+    writer_delivery_url: item.writer_delivery_url ?? "",
     production_file_url: item.production_file_url ?? "",
     partnerIds: partnerRows.map((row) => row.partner_id.toString()),
     newPartner: "",
   };
 }
 
-function buildItemPayload(editable: EditableState): TablesUpdate<"items"> {
-  return {
-    title: editable.title,
-    track_id: editable.track_id ? Number(editable.track_id) : null,
-    idea_type_id: editable.idea_type_id ? Number(editable.idea_type_id) : null,
-    caption: editable.caption.trim() ? editable.caption : null,
-    notes: editable.notes.trim() ? editable.notes : null,
-    production_file_url: editable.production_file_url.trim() ? editable.production_file_url : null,
-  };
+function buildItemPayload(editable: EditableState, fields: EditableItemField[]) {
+  const payload: Partial<Record<EditableItemField, string | number | null>> = {};
+  for (const field of fields) {
+    if (field === "track_id" || field === "idea_type_id") {
+      payload[field] = editable[field] ? Number(editable[field]) : null;
+    } else if (field === "caption" || field === "notes" || field === "writer_delivery_url" || field === "production_file_url") {
+      payload[field] = editable[field].trim() ? editable[field] : null;
+    } else if (field === "title") {
+      payload.title = editable.title;
+    }
+  }
+  return payload;
 }
 
-function itemPayloadSignature(payload: TablesUpdate<"items">) {
+function itemPayloadSignature(payload: Partial<Record<EditableItemField, string | number | null>>) {
   return JSON.stringify({
     title: payload.title ?? null,
     track_id: payload.track_id ?? null,
     idea_type_id: payload.idea_type_id ?? null,
     caption: payload.caption ?? null,
     notes: payload.notes ?? null,
+    writer_delivery_url: payload.writer_delivery_url ?? null,
     production_file_url: payload.production_file_url ?? null,
+    priority: payload.priority ?? null,
   });
 }
 
-function editableSignature(editable: EditableState) {
-  return itemPayloadSignature(buildItemPayload(editable));
+function editableSignature(editable: EditableState, fields: EditableItemField[]) {
+  return itemPayloadSignature(buildItemPayload(editable, fields));
 }
 
 function touchesItemFields(patch: Partial<EditableState>) {
   return itemFieldKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key));
+}
+
+function drawerEditableFields(fields: EditableItemField[]) {
+  return fields.filter((field) => itemFieldKeySet.has(field));
 }
 
 function findTrack(tracks: TrackOption[], item: ItemRow | DrawerPreview | null) {
@@ -193,14 +204,19 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const trackColor = currentTrack?.color_hex ?? preview?.track_color ?? null;
   const ideaTypeName = currentIdeaType?.name ?? preview?.idea_type ?? null;
   const isAdmin = isAdminRole(roles);
-  const isReviewer = isReviewerRole(roles);
   const participantParts = details?.participants.filter((row) => row.user_id === currentUserId).map((row) => row.part) ?? [];
-  const isParticipant = participantParts.length > 0;
-  const isWriter = participantParts.includes("writer");
   const isProducer = participantParts.includes("producer");
+  const permissions = getItemPermissions({
+    profile: { active: true, must_change_password: false, roles },
+    item: item ? { is_archived: item.is_archived } : null,
+    participantParts,
+  });
+  const saveFieldKeys = drawerEditableFields(permissions.editableFields);
+  const hasEditableFields = saveFieldKeys.length > 0;
   const hasProducer = details?.participants.some((row) => row.part === "producer") ?? false;
   const hasApprovalHistory = details?.approvals.some((approval) => approval.result === "approve") ?? false;
   const captionText = item?.caption ?? preview?.caption ?? null;
+  const writerDeliveryUrl = item?.writer_delivery_url ?? null;
   const productionFileUrl = item?.production_file_url ?? preview?.production_file_url ?? null;
 
   useEffect(() => {
@@ -302,7 +318,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         hasUserEditedFields.current = false;
         latestItemRef.current = payload.details.item;
         latestEditableRef.current = nextEditable;
-        lastSavedSignatureRef.current = editableSignature(nextEditable);
+        lastSavedSignatureRef.current = editableSignature(nextEditable, saveFieldsFor(payload.details.item, payload.details.participants));
         setDetails(payload.details);
         setEditable(nextEditable);
         setLoadState("ready");
@@ -329,6 +345,15 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       window.clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
+  }
+
+  function saveFieldsFor(targetItem: ItemRow, participantRows = details?.participants ?? []) {
+    const parts = participantRows.filter((row) => row.user_id === currentUserId).map((row) => row.part);
+    return drawerEditableFields(getItemPermissions({
+      profile: { active: true, must_change_password: false, roles },
+      item: { is_archived: targetItem.is_archived },
+      participantParts: parts,
+    }).editableFields);
   }
 
   function requestConfirmation(dialog: ConfirmDialog) {
@@ -380,7 +405,14 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         const currentEditable = latestEditableRef.current;
         if (!currentItem || !currentEditable || currentItem.is_archived) continue;
 
-        const payload = buildItemPayload(currentEditable);
+        const allowedSaveFields = saveFieldsFor(currentItem);
+        if (allowedSaveFields.length === 0) {
+          hasUserEditedFields.current = false;
+          if (options.showMessage) setMessage("لا تملك صلاحية تعديل حقول هذه المادة.");
+          continue;
+        }
+
+        const payload = buildItemPayload(currentEditable, allowedSaveFields);
         const signature = itemPayloadSignature(payload);
         if (signature === lastSavedSignatureRef.current) {
           hasUserEditedFields.current = false;
@@ -393,23 +425,29 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         }
 
         const itemIdAtSave = currentItem.id;
-        const { data, error } = await supabase.from("items").update(payload).eq("id", itemIdAtSave).select("*").single();
-        if (error) {
+        const response = await fetch(`/api/items/${encodeURIComponent(itemIdAtSave)}/fields`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          credentials: "same-origin",
+        });
+        const result = (await response.json().catch(() => ({}))) as { item?: ItemRow; error?: string };
+        if (!response.ok || !result.item) {
           didSucceed = false;
           if (latestItemRef.current?.id === itemIdAtSave) {
-            setMessage(itemSaveErrorMessage);
+            setMessage(result.error ?? itemSaveErrorMessage);
           }
           break;
         }
 
         if (latestItemRef.current?.id !== itemIdAtSave) continue;
 
-        const savedItem = data ?? ({ ...currentItem, ...payload } as ItemRow);
+        const savedItem = result.item;
         latestItemRef.current = savedItem;
         lastSavedSignatureRef.current = signature;
         setDetails((current) => current && current.item.id === itemIdAtSave ? { ...current, item: savedItem } : current);
 
-        const latestSignature = latestEditableRef.current ? editableSignature(latestEditableRef.current) : signature;
+        const latestSignature = latestEditableRef.current ? editableSignature(latestEditableRef.current, allowedSaveFields) : signature;
         if (latestSignature === signature) {
           hasUserEditedFields.current = false;
           if (options.showMessage) setMessage("تم حفظ التعديلات.");
@@ -461,7 +499,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       hasUserEditedFields.current = false;
       latestItemRef.current = data;
       latestEditableRef.current = nextEditable;
-      lastSavedSignatureRef.current = editableSignature(nextEditable);
+      lastSavedSignatureRef.current = editableSignature(nextEditable, saveFieldsFor(data, details?.participants ?? []));
       setDetails((current) => current ? { ...current, item: data } : current);
       setEditable((current) => current ? nextEditable : current);
     }
@@ -486,7 +524,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     const currentItem = latestItemRef.current;
     const currentEditable = latestEditableRef.current;
     if (!currentItem || !currentEditable || currentItem.is_archived) return false;
-    return editableSignature(currentEditable) !== lastSavedSignatureRef.current;
+    const allowedSaveFields = saveFieldsFor(currentItem);
+    if (allowedSaveFields.length === 0) return false;
+    return editableSignature(currentEditable, allowedSaveFields) !== lastSavedSignatureRef.current;
   }
 
   async function handleClose() {
@@ -511,43 +551,40 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   async function savePartners() {
-    if (!item || !editable || item.is_archived) return;
+    if (!item || !editable || item.is_archived || !permissions.canManagePartners) return;
     let selectedIds = editable.partnerIds.map(Number);
-    let addedPartner = false;
     const typed = editable.newPartner.trim();
     if (typed) {
       const existing = partners.find((partner) => partner.name === typed);
       if (existing) {
         selectedIds = [...selectedIds, existing.id];
       } else if (await requestConfirmation({ message: "لا يوجد شريك بهذا الاسم، أضِفه؟", confirmLabel: "أضف الشريك", cancelLabel: "إلغاء" })) {
-        const { data, error } = await supabase.from("partners").insert({ name: typed, aliases: [typed] }).select("id, name").single();
-        if (error) {
-          setMessage(partnerCreateErrorMessage);
-          return;
-        }
-        selectedIds = [...selectedIds, data.id];
-        addedPartner = true;
-      }
-    }
-
-    const uniqueIds = Array.from(new Set(selectedIds));
-    const { error: deleteError } = await supabase.from("item_partners").delete().eq("item_id", item.id);
-    if (deleteError) {
-      setMessage(partnersClearErrorMessage);
-      return;
-    }
-
-    if (uniqueIds.length > 0) {
-      const rows: TablesInsert<"item_partners">[] = uniqueIds.map((partner_id) => ({ item_id: item.id, partner_id }));
-      const { error: insertError } = await supabase.from("item_partners").insert(rows);
-      if (insertError) {
-        setMessage(partnersSaveErrorMessage);
+        selectedIds = [...selectedIds];
+      } else {
         return;
       }
     }
 
-    if (addedPartner) {
+    const uniqueIds = Array.from(new Set(selectedIds));
+    const response = await fetch(`/api/items/${encodeURIComponent(item.id)}/partners`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ partnerIds: uniqueIds, newPartner: typed }),
+    });
+    const result = (await response.json().catch(() => ({}))) as { partners?: PartnerRecord[]; error?: string };
+    if (!response.ok) {
+      setMessage(result.error ?? partnersSaveErrorMessage);
+      return;
+    }
+
+    if (typed) {
       await refreshReferenceData();
+    }
+
+    if (result.partners) {
+      setDetails((current) => current && current.item.id === item.id ? { ...current, partners: result.partners ?? current.partners } : current);
+      setEditable((current) => current ? { ...current, partnerIds: (result.partners ?? []).map((row) => row.partner_id.toString()), newPartner: "" } : current);
     }
 
     setMessage("تم حفظ الشركاء.");
@@ -612,6 +649,28 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     await reloadAndNotify();
   }
 
+  function canEditField(field: EditableItemField) {
+    return saveFieldKeys.includes(field);
+  }
+
+  function copyButton(value: string | null | undefined, label = "نسخ") {
+    return value ? <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(value)}>{label}</button> : null;
+  }
+
+  function linkButtons(value: string | null | undefined, openLabel: string) {
+    if (!value) return <span>—</span>;
+    return (
+      <div className="actions-row">
+        <a className="button button-secondary" href={value} target="_blank" rel="noopener noreferrer">{openLabel}</a>
+        {copyButton(value)}
+      </div>
+    );
+  }
+
+  function readOnlyField(label: string, value: string | null | undefined) {
+    return <div className="field"><span>{label}</span><div className="read-box">{value || "—"}</div></div>;
+  }
+
   if (!itemId) return null;
 
   const drawerDetails = details;
@@ -665,26 +724,38 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
             {item && editable && canEdit(item) ? (
               <section className="drawer-section stack">
                 <h3>الحقول</h3>
-                <label className="field">العنوان<input className="input" value={editable.title} onChange={(event) => updateEditable({ title: event.target.value })} /></label>
+                <p className="muted">حقول النص للكاتب المعيّن، ورابط الإنتاج للمنتج المعيّن، والشركاء والموعد لمسؤول النشر.</p>
+                {canEditField("title") ? <label className="field">العنوان<input className="input" value={editable.title} onChange={(event) => updateEditable({ title: event.target.value })} /></label> : readOnlyField("العنوان", item.title)}
                 <div className="form-grid">
-                  <label className="field">المسار<select className="input" value={editable.track_id} onChange={(event) => updateEditable({ track_id: event.target.value })}><option value="">—</option>{tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label>
-                  <label className="field">نوع الفكرة<select className="input" value={editable.idea_type_id} onChange={(event) => updateEditable({ idea_type_id: event.target.value })}><option value="">—</option>{ideaTypes.map((ideaType) => <option key={ideaType.id} value={ideaType.id}>{ideaType.name}</option>)}</select></label>
+                  {canEditField("track_id") ? <label className="field">المسار<select className="input" value={editable.track_id} onChange={(event) => updateEditable({ track_id: event.target.value })}><option value="">—</option>{tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label> : readOnlyField("المسار", trackName)}
+                  {canEditField("idea_type_id") ? <label className="field">نوع الفكرة<select className="input" value={editable.idea_type_id} onChange={(event) => updateEditable({ idea_type_id: event.target.value })}><option value="">—</option>{ideaTypes.map((ideaType) => <option key={ideaType.id} value={ideaType.id}>{ideaType.name}</option>)}</select></label> : readOnlyField("نوع الفكرة", ideaTypeName)}
                 </div>
                 {hasApprovalHistory ? <p className="soft-banner">هذا النص معتمَد — تعديله لا يُلغي الاعتماد تلقائياً. أبلغ المراجع إن كان التغيير جوهرياً.</p> : null}
-                <label className="field">الكابشن<textarea className={`input textarea ${largeCaption ? "textarea-large" : ""}`} value={editable.caption} onChange={(event) => updateEditable({ caption: event.target.value })} /></label>
-                <label className="field">الملاحظات<textarea className="input textarea" value={editable.notes} onChange={(event) => updateEditable({ notes: event.target.value })} /></label>
-                <label className="field">رابط ملف الإنتاج<input className="input" value={editable.production_file_url} onChange={(event) => updateEditable({ production_file_url: event.target.value })} /></label>
-                <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => saveFields(true))}>حفظ التعديلات</button>
-                <fieldset className="drawer-partners">
-                  <legend>الشركاء</legend>
-                  <div className="drawer-partner-checks">
-                    {partners.map((partner) => <label className="drawer-partner-option" key={partner.id}><input type="checkbox" checked={editable.partnerIds.includes(partner.id.toString())} onChange={(event) => updateEditable({ partnerIds: event.target.checked ? [...editable.partnerIds, partner.id.toString()] : editable.partnerIds.filter((id) => id !== partner.id.toString()) })} /> <span>{partner.name}</span></label>)}
-                  </div>
-                  <div className="drawer-new-partner stack">
-                    <label className="field">شريك جديد<input className="input" value={editable.newPartner} onChange={(event) => updateEditable({ newPartner: event.target.value })} /></label>
-                    <button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => runAction(savePartners)}>حفظ الشركاء</button>
-                  </div>
-                </fieldset>
+                {canEditField("caption") ? <label className="field">الكابشن<textarea className={`input textarea ${largeCaption ? "textarea-large" : ""}`} value={editable.caption} onChange={(event) => updateEditable({ caption: event.target.value })} /></label> : readOnlyField("الكابشن", item.caption)}
+                {canEditField("notes") ? <label className="field">الملاحظات<textarea className="input textarea" value={editable.notes} onChange={(event) => updateEditable({ notes: event.target.value })} /></label> : readOnlyField("الملاحظات", item.notes)}
+                {canEditField("writer_delivery_url") ? (
+                  <label className="field">رابط تسليم الكاتب<input className="input" value={editable.writer_delivery_url} onChange={(event) => updateEditable({ writer_delivery_url: event.target.value })} /></label>
+                ) : (
+                  <div className="field"><span>رابط تسليم الكاتب</span>{linkButtons(writerDeliveryUrl, "فتح رابط التسليم")}</div>
+                )}
+                {canEditField("production_file_url") ? (
+                  <label className="field">رابط ملف الإنتاج<input className="input" value={editable.production_file_url} onChange={(event) => updateEditable({ production_file_url: event.target.value })} /></label>
+                ) : (
+                  <div className="field"><span>رابط ملف الإنتاج</span>{linkButtons(productionFileUrl, "فتح ملف الإنتاج")}</div>
+                )}
+                {hasEditableFields ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => saveFields(true))}>حفظ التعديلات</button> : null}
+                {permissions.canManagePartners ? (
+                  <fieldset className="drawer-partners">
+                    <legend>الشركاء</legend>
+                    <div className="drawer-partner-checks">
+                      {partners.map((partner) => <label className="drawer-partner-option" key={partner.id}><input type="checkbox" checked={editable.partnerIds.includes(partner.id.toString())} onChange={(event) => updateEditable({ partnerIds: event.target.checked ? [...editable.partnerIds, partner.id.toString()] : editable.partnerIds.filter((id) => id !== partner.id.toString()) })} /> <span>{partner.name}</span></label>)}
+                    </div>
+                    <div className="drawer-new-partner stack">
+                      <label className="field">شريك جديد<input className="input" value={editable.newPartner} onChange={(event) => updateEditable({ newPartner: event.target.value })} /></label>
+                      <button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => runAction(savePartners)}>حفظ الشركاء</button>
+                    </div>
+                  </fieldset>
+                ) : null}
               </section>
             ) : null}
 
@@ -694,8 +765,12 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(captionText ?? "")}>نسخ الكابشن</button>
               {item?.notes ? <p>{item.notes}</p> : null}
               <div className="actions-row">
-                {productionFileUrl ? <a className="button button-secondary" href={productionFileUrl} target="_blank" rel="noreferrer">فتح ملف الإنتاج</a> : null}
-                {item?.ig_permalink ? <a className="button button-secondary" href={item.ig_permalink} target="_blank" rel="noreferrer">فتح المنشور</a> : null}
+                {writerDeliveryUrl ? <a className="button button-secondary" href={writerDeliveryUrl} target="_blank" rel="noopener noreferrer">فتح رابط التسليم</a> : null}
+                {writerDeliveryUrl ? copyButton(writerDeliveryUrl) : null}
+                {productionFileUrl ? <a className="button button-secondary" href={productionFileUrl} target="_blank" rel="noopener noreferrer">فتح ملف الإنتاج</a> : null}
+                {productionFileUrl ? copyButton(productionFileUrl) : null}
+                {item?.ig_permalink ? <a className="button button-secondary" href={item.ig_permalink} target="_blank" rel="noopener noreferrer">فتح المنشور</a> : null}
+                {item?.ig_permalink ? copyButton(item.ig_permalink) : null}
               </div>
             </section>
 
@@ -715,26 +790,26 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
             {item && editable && !item.is_archived ? (
               <section className="drawer-section stack">
                 <h3>الإجراءات</h3>
-                {item.status === "idea" && isWriter ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(async () => { if (await requestConfirmation({ message: "متأكد أنك جاهز للتسليم؟", confirmLabel: "تسليم", cancelLabel: "إلغاء" })) await advance("writing"); })}>تسليم</button> : null}
-                {item.status === "writing" && isReviewer ? (
+                {item.status === "idea" && permissions.canSubmitWriting ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(async () => { if (await requestConfirmation({ message: "متأكد أنك جاهز للتسليم؟", confirmLabel: "تسليم", cancelLabel: "إلغاء" })) await advance("writing"); })}>تسليم</button> : null}
+                {item.status === "writing" && permissions.canReview ? (
                   <>
                     <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("content_approved"))}>اعتماد</button>
                     <label className="field">ملاحظة الإعادة<textarea className="input textarea" placeholder="هذه الملاحظة هي ما سيراه الكاتب." value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} /></label>
                     <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || actionDisabled} onClick={() => runAction(() => reject("content"))}>إعادة بملاحظة</button>
                   </>
                 ) : item.status === "writing" ? <p className="muted">بانتظار مراجع.</p> : null}
-                {item.status === "content_approved" && (isParticipant || isAdmin) ? hasProducer ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("in_production"))}>ابدأ الإنتاج</button> : <p className="muted">بانتظار تعيين منتج.</p> : null}
-                {item.status === "in_production" && isReviewer ? (
+                {item.status === "content_approved" && permissions.canStartProduction ? hasProducer ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("in_production"))}>ابدأ الإنتاج</button> : <p className="muted">بانتظار تعيين منتج.</p> : null}
+                {item.status === "in_production" && permissions.canReview ? (
                   <>
                     <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("design_approved"))}>اعتماد التصميم</button>
                     <label className="field">ملاحظة الإعادة<textarea className="input textarea" placeholder="هذه الملاحظة هي ما سيراه المنتج." value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} /></label>
                     <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || actionDisabled} onClick={() => runAction(() => reject("design"))}>إعادة بملاحظة</button>
                   </>
                 ) : item.status === "in_production" ? <p className="muted">{isProducer ? "بانتظار مراجع." : "بانتظار الإنتاج والمراجعة."}</p> : null}
-                {item.status === "design_approved" && (isParticipant || isAdmin) ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("ready"))}>انتقل إلى جاهز للنشر</button> : null}
+                {item.status === "design_approved" && permissions.canMoveReady ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("ready"))}>انتقل إلى جاهز للنشر</button> : null}
                 {item.status === "ready" ? <p className="muted">تظهر هذه المادة في شاشة جاهز للنشر.</p> : null}
-                {!item.slot_id && item.status !== "published" ? (
-                  <label className="field">موعد النشر<select className="input" defaultValue="" disabled={actionDisabled} onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails?.openSlots.map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
+                {permissions.canAssignSlot && item.status !== "published" ? (
+                  <label className="field">موعد النشر<select className="input" value={item.slot_id ?? ""} disabled={actionDisabled} onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails?.currentSlot ? <option value={drawerDetails.currentSlot.id}>{formatHebronDateTime(drawerDetails.currentSlot.slot_at)}</option> : null}{drawerDetails?.openSlots.filter((slot) => slot.slot_id && slot.slot_id !== item.slot_id).map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
                 ) : null}
                 {isAdmin && failedAdvance ? (
                   <div className="override-box">
