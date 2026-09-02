@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { AdminStageControl, type AdminStageCurrentSlot } from "@/components/admin-stage-control";
 import { useReferenceData } from "@/components/reference-data-provider";
-import { type EditableItemField, getItemPermissions } from "@/lib/item-permissions";
+import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/lib/database.types";
 import type { DrawerPreview, IdeaTypeOption, ItemStatus, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
@@ -659,10 +659,12 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
 
   function linkButtons(value: string | null | undefined, openLabel: string) {
     if (!value) return <span>—</span>;
+    const href = safeHttpsHref(value);
+    if (!href) return <span>رابط غير صالح</span>;
     return (
       <div className="actions-row">
-        <a className="button button-secondary" href={value} target="_blank" rel="noopener noreferrer">{openLabel}</a>
-        {copyButton(value)}
+        <a className="button button-secondary" href={href} target="_blank" rel="noopener noreferrer">{openLabel}</a>
+        {copyButton(href)}
       </div>
     );
   }
@@ -765,10 +767,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(captionText ?? "")}>نسخ الكابشن</button>
               {item?.notes ? <p>{item.notes}</p> : null}
               <div className="actions-row">
-                {writerDeliveryUrl ? <a className="button button-secondary" href={writerDeliveryUrl} target="_blank" rel="noopener noreferrer">فتح رابط التسليم</a> : null}
-                {writerDeliveryUrl ? copyButton(writerDeliveryUrl) : null}
-                {productionFileUrl ? <a className="button button-secondary" href={productionFileUrl} target="_blank" rel="noopener noreferrer">فتح ملف الإنتاج</a> : null}
-                {productionFileUrl ? copyButton(productionFileUrl) : null}
+                {writerDeliveryUrl ? linkButtons(writerDeliveryUrl, "فتح رابط التسليم") : null}
+                {productionFileUrl ? linkButtons(productionFileUrl, "فتح ملف الإنتاج") : null}
                 {item?.ig_permalink ? <a className="button button-secondary" href={item.ig_permalink} target="_blank" rel="noopener noreferrer">فتح المنشور</a> : null}
                 {item?.ig_permalink ? copyButton(item.ig_permalink) : null}
               </div>

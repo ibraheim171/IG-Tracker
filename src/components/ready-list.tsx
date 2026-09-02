@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useTransition, type CSSProperties } from "react";
 import { ItemDrawer } from "@/components/item-drawer";
-import { isPublisherRole } from "@/lib/item-permissions";
+import { isPublisherRole, safeHttpsHref } from "@/lib/item-permissions";
 import { createClient } from "@/lib/supabase/client";
 import type { DrawerPreview, ReadyItem, RoleName } from "@/lib/ui-data";
 import { extractMessage, formatHebronDateTime, isAdminRole, parseRuleMessage } from "@/lib/ui-data";
@@ -94,8 +94,9 @@ export function ReadyList({ initialItems, currentUserId, roles }: Props) {
               <div className="read-box">{item.caption || "—"}</div>
               <div className="actions-row">
                 <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(item.caption ?? "")}>نسخ الكابشن</button>
-                {item.production_file_url ? <a className="button button-secondary" href={item.production_file_url} target="_blank" rel="noopener noreferrer">فتح ملف الإنتاج</a> : null}
-                {item.production_file_url ? <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(item.production_file_url ?? "")}>نسخ رابط الإنتاج</button> : null}
+                {item.production_file_url && safeHttpsHref(item.production_file_url) ? <a className="button button-secondary" href={safeHttpsHref(item.production_file_url) ?? undefined} target="_blank" rel="noopener noreferrer">فتح ملف الإنتاج</a> : null}
+                {item.production_file_url && safeHttpsHref(item.production_file_url) ? <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(safeHttpsHref(item.production_file_url) ?? "")}>نسخ رابط الإنتاج</button> : null}
+                {item.production_file_url && !safeHttpsHref(item.production_file_url) ? <span>رابط غير صالح</span> : null}
                 <button className="button button-secondary" type="button" onClick={() => setOpenItemId(item.id)}>فتح البطاقة</button>
                 {canPublish ? <button className="button" type="button" onClick={() => setPublishItem(item)}>تم النشر</button> : null}
               </div>

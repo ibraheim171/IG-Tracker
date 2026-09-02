@@ -43,7 +43,7 @@ export type ItemPermissions = {
 
 export type FieldPatchValidation =
   | { ok: true; fields: Partial<Record<EditableItemField, unknown>> }
-  | { ok: false; code: "E_INVALID_PAYLOAD" | "E_FIELD_FORBIDDEN"; fields?: string[] };
+  | { ok: false; code: "E_INVALID_PAYLOAD" | "E_FIELD_FORBIDDEN" | "E_INVALID_LINK"; fields?: string[] };
 
 const writerFields: EditableItemField[] = ["title", "track_id", "idea_type_id", "caption", "notes", "writer_delivery_url"];
 const producerFields: EditableItemField[] = ["production_file_url"];
@@ -63,6 +63,22 @@ export function hasRole(roles: RoleName[], role: RoleName) {
 
 export function isPublisherRole(roles: RoleName[]) {
   return hasRole(roles, "publisher") || hasRole(roles, "admin");
+}
+
+export function isSafeHttpsUrl(value: string | null | undefined) {
+  if (value == null || value.trim() === "") return true;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function safeHttpsHref(value: string | null | undefined) {
+  if (value == null || value.trim() === "") return null;
+  const trimmed = value.trim();
+  return isSafeHttpsUrl(trimmed) ? trimmed : null;
 }
 
 export function getItemPermissions(input: PermissionInput): ItemPermissions {
@@ -104,6 +120,12 @@ export function validateItemFieldPatch(input: PermissionInput, fields: unknown):
   const known = new Set<string>(editableItemFields);
   const forbidden = entries.map(([field]) => field).filter((field) => !known.has(field) || !allowed.has(field as EditableItemField));
   if (forbidden.length > 0) return { ok: false, code: "E_FIELD_FORBIDDEN", fields: forbidden };
+
+  const invalidLinks = entries
+    .filter(([field]) => field === "writer_delivery_url" || field === "production_file_url")
+    .filter(([, value]) => value != null && (typeof value !== "string" || !isSafeHttpsUrl(value)))
+    .map(([field]) => field);
+  if (invalidLinks.length > 0) return { ok: false, code: "E_INVALID_LINK", fields: invalidLinks };
 
   return { ok: true, fields: Object.fromEntries(entries) as Partial<Record<EditableItemField, unknown>> };
 }

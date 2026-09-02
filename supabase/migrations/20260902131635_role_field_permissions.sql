@@ -61,6 +61,17 @@ as $$
   select public.is_admin() or public.has_role_text('publisher');
 $$;
 
+create or replace function public.is_safe_https_url(p_value text)
+returns boolean
+language sql
+immutable
+set search_path = public
+as $$
+  select p_value is null
+      or btrim(p_value) = ''
+      or btrim(p_value) ~* '^https://([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(:[0-9]{1,5})?([/?#][^[:space:]]*)?$';
+$$;
+
 create or replace function public.guard_item_columns() returns trigger
 language plpgsql
 set search_path = public
@@ -264,6 +275,14 @@ begin
     raise exception 'INVALID_PAYLOAD: العنوان مطلوب';
   end if;
 
+  if p_fields ? 'writer_delivery_url' and not public.is_safe_https_url(p_fields ->> 'writer_delivery_url') then
+    raise exception 'INVALID_LINK: رابط تسليم الكاتب يجب أن يكون HTTPS صالحاً';
+  end if;
+
+  if p_fields ? 'production_file_url' and not public.is_safe_https_url(p_fields ->> 'production_file_url') then
+    raise exception 'INVALID_LINK: رابط ملف الإنتاج يجب أن يكون HTTPS صالحاً';
+  end if;
+
   update public.items
      set title = case when p_fields ? 'title' then btrim(p_fields ->> 'title') else title end,
          track_id = case when p_fields ? 'track_id' then nullif(p_fields ->> 'track_id', '')::smallint else track_id end,
@@ -317,6 +336,10 @@ begin
 
   if coalesce(btrim(p_fields ->> 'title'), '') = '' then
     raise exception 'INVALID_PAYLOAD: العنوان مطلوب';
+  end if;
+
+  if p_fields ? 'writer_delivery_url' and not public.is_safe_https_url(p_fields ->> 'writer_delivery_url') then
+    raise exception 'INVALID_LINK: رابط تسليم الكاتب يجب أن يكون HTTPS صالحاً';
   end if;
 
   perform set_config('app.rpc', 'on', true);
@@ -722,10 +745,18 @@ revoke insert, update, delete on table public.items from public, anon, authentic
 revoke insert, update, delete on table public.item_participants from public, anon, authenticated;
 revoke insert, update, delete on table public.partners from anon, authenticated;
 revoke insert, update, delete on table public.item_partners from anon, authenticated;
+revoke truncate on table
+  public.items,
+  public.item_participants,
+  public.partners,
+  public.item_partners,
+  public.publishing_slots
+from public, anon, authenticated;
 
 revoke execute on function public.has_role_text(text) from public, anon;
 revoke execute on function public.is_item_participant_part(uuid, public.participant_part) from public, anon;
 revoke execute on function public.can_publish_items() from public, anon;
+revoke execute on function public.is_safe_https_url(text) from public, anon, authenticated;
 revoke execute on function public.ensure_can_advance_item(uuid, public.item_status, public.item_status) from public, anon, authenticated;
 revoke execute on function public.create_item(jsonb) from public, anon, authenticated;
 revoke execute on function public.save_item_fields(uuid, jsonb) from public, anon, authenticated;

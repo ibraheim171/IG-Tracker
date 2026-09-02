@@ -50,11 +50,13 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   }, body);
 
   if (!validation.ok) {
+    const isForbidden = validation.code === "E_FIELD_FORBIDDEN";
+    const isInvalidLink = validation.code === "E_INVALID_LINK";
     return responseWithCookies({
-      error: validation.code === "E_FIELD_FORBIDDEN" ? "لا تملك صلاحية تعديل واحد أو أكثر من هذه الحقول." : "البيانات المدخلة غير صحيحة.",
+      error: isForbidden ? "لا تملك صلاحية تعديل واحد أو أكثر من هذه الحقول." : isInvalidLink ? "روابط التسليم والإنتاج يجب أن تكون روابط HTTPS صالحة." : "البيانات المدخلة غير صحيحة.",
       code: validation.code,
       fields: validation.fields,
-    }, validation.code === "E_FIELD_FORBIDDEN" ? 403 : 400, cookieResponse);
+    }, isForbidden ? 403 : 400, cookieResponse);
   }
 
   const permissions = getItemPermissions({ profile: auth.profile, item: itemResult.data, participantParts });
@@ -68,7 +70,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   });
 
   if (error || !data) {
-    return responseWithCookies({ error: "تعذر حفظ التعديلات.", code: "E_ITEM_SAVE" }, 400, cookieResponse);
+    const message = error?.message?.includes("INVALID_LINK:")
+      ? "روابط التسليم والإنتاج يجب أن تكون روابط HTTPS صالحة."
+      : "تعذر حفظ التعديلات.";
+    return responseWithCookies({ error: message, code: "E_ITEM_SAVE" }, 400, cookieResponse);
   }
 
   return responseWithCookies({ item: data as ItemRow }, 200, cookieResponse);

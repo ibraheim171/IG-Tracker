@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { getItemPermissions, validateItemFieldPatch } from "./item-permissions.ts";
+import { getItemPermissions, isSafeHttpsUrl, safeHttpsHref, validateItemFieldPatch } from "./item-permissions.ts";
 import type { ParticipantPart, RoleName } from "./ui-data.ts";
 
 const migration = readFileSync("supabase/migrations/20260902131635_role_field_permissions.sql", "utf8");
 const appGuardMigration = readFileSync("supabase/migrations/20260901093257_must_change_password_app_guard.sql", "utf8");
+const fieldsRoute = readFileSync("src/app/api/items/[itemId]/fields/route.ts", "utf8");
+const itemDrawer = readFileSync("src/components/item-drawer.tsx", "utf8");
+const readyList = readFileSync("src/components/ready-list.tsx", "utf8");
 
 function profile(roles: RoleName[], options: { active?: boolean; mustChangePassword?: boolean } = {}) {
   return {
@@ -58,6 +61,40 @@ test("writer cannot edit production URL", () => {
   const result = validateItemFieldPatch(input(["writer"], ["writer"]), { production_file_url: "https://example.com/production" });
   assert.equal(result.ok, false);
   assert.equal(result.code, "E_FIELD_FORBIDDEN");
+});
+
+test("item delivery links accept only valid https URLs or blank values", () => {
+  for (const value of [null, "", "   ", "https://example.com/file", " https://docs.google.com/document/d/abc?usp=sharing "]) {
+    assert.equal(isSafeHttpsUrl(value), true);
+  }
+  for (const value of ["javascript:alert(1)", "data:text/html,hi", "file:///tmp/a", "http://example.com/file", "plain text"]) {
+    assert.equal(isSafeHttpsUrl(value), false);
+  }
+});
+
+test("blank delivery links can be cleared by allowed roles", () => {
+  const writerResult = validateItemFieldPatch(input(["writer"], ["writer"]), { writer_delivery_url: null });
+  assert.deepEqual(writerResult, { ok: true, fields: { writer_delivery_url: null } });
+  const producerResult = validateItemFieldPatch(input(["producer"], ["producer"]), { production_file_url: "" });
+  assert.deepEqual(producerResult, { ok: true, fields: { production_file_url: "" } });
+});
+
+test("invalid delivery link rejects the whole item field payload", () => {
+  const result = validateItemFieldPatch(input(["writer"], ["writer"]), {
+    caption: "نص صالح",
+    writer_delivery_url: "javascript:alert(1)",
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "E_INVALID_LINK");
+  assert.deepEqual(result.fields, ["writer_delivery_url"]);
+});
+
+test("safe href helper never returns unsafe legacy values", () => {
+  assert.equal(safeHttpsHref("https://example.com/file"), "https://example.com/file");
+  assert.equal(safeHttpsHref("javascript:alert(1)"), null);
+  assert.equal(safeHttpsHref("data:text/html,hi"), null);
+  assert.equal(safeHttpsHref("http://example.com/file"), null);
+  assert.equal(safeHttpsHref("plain text"), null);
 });
 
 test("assigned reviewer can approve or reject only, without field edits", () => {
@@ -145,6 +182,10 @@ test("database migration enforces trusted RPC and publisher-admin boundaries", (
   assert.match(migration, /public\.assert_can_use_app\(\)/);
 });
 
+test("database migration revokes truncate from browser roles on writable operational tables", () => {
+  assert.match(migration, /revoke truncate on table[\s\S]*public\.items[\s\S]*public\.item_participants[\s\S]*public\.partners[\s\S]*public\.item_partners[\s\S]*public\.publishing_slots[\s\S]*from public, anon, authenticated/);
+});
+
 test("assigned writer cannot self-promote through item_participants Data API writes", () => {
   assert.match(migration, /drop policy if exists write_participants on public\.item_participants/);
   assert.match(migration, /create policy no_direct_item_participant_insert on public\.item_participants[\s\S]*with check \(false\)/);
@@ -171,6 +212,31 @@ test("database create item path blocks sensitive insert fields and starts from i
   const insertBlock = migration.match(/insert into public\.items \([\s\S]*?\)\s*values/)?.[0] ?? "";
   assert.doesNotMatch(insertBlock, /status|slot_id|published_at|ig_permalink|ig_media_id|production_file_url|is_archived/);
   assert.match(migration, /if it\.status <> 'idea' then/);
+});
+
+test("database create and save paths reject unsafe delivery links before mutation", () => {
+  assert.match(migration, /create or replace function public\.is_safe_https_url\(p_value text\)/);
+  assert.match(migration, /\^https:\/\/\(\[a-z0-9\]/);
+  const saveBlock = migration.match(/create or replace function public\.save_item_fields\([\s\S]*?\nend\n\$\$;/)?.[0] ?? "";
+  const createBlock = migration.match(/create or replace function public\.create_item\([\s\S]*?\nend\n\$\$;/)?.[0] ?? "";
+  assert.match(saveBlock, /p_fields \? 'writer_delivery_url' and not public\.is_safe_https_url/);
+  assert.match(saveBlock, /p_fields \? 'production_file_url' and not public\.is_safe_https_url/);
+  assert.ok(saveBlock.indexOf("INVALID_LINK") < saveBlock.indexOf("update public.items"));
+  assert.match(createBlock, /p_fields \? 'writer_delivery_url' and not public\.is_safe_https_url/);
+  assert.ok(createBlock.indexOf("INVALID_LINK") < createBlock.indexOf("insert into public.items"));
+});
+
+test("field route and UI block unsafe delivery links before href rendering", () => {
+  assert.match(fieldsRoute, /E_INVALID_LINK/);
+  assert.match(fieldsRoute, /روابط التسليم والإنتاج يجب أن تكون روابط HTTPS صالحة/);
+  assert.match(itemDrawer, /safeHttpsHref/);
+  assert.match(readyList, /safeHttpsHref/);
+  assert.doesNotMatch(itemDrawer, /href=\{writerDeliveryUrl\}|href=\{productionFileUrl\}/);
+  assert.doesNotMatch(readyList, /href=\{item\.production_file_url\}/);
+  assert.match(itemDrawer, /رابط غير صالح/);
+  assert.match(readyList, /رابط غير صالح/);
+  assert.match(itemDrawer, /target="_blank" rel="noopener noreferrer"/);
+  assert.match(readyList, /target="_blank" rel="noopener noreferrer"/);
 });
 
 test("reject item is limited to the matching review gate and stage", () => {
