@@ -1,23 +1,25 @@
-import { randomBytes } from "crypto";
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
-import type { Database } from "@/lib/database.types";
-import { createRouteClient } from "@/lib/supabase/route";
-
-type Role = Database["public"]["Enums"]["role_name"];
-const allowedRoles: Role[] = ["writer", "reviewer", "producer", "admin"];
-
-function isRole(value: unknown): value is Role { return typeof value === "string" && allowedRoles.includes(value as Role); }
-function validRoles(value: unknown): value is Role[] { return Array.isArray(value) && value.length > 0 && value.every(isRole); }
-function generatePassword() { return randomBytes(9).toString("base64url").slice(0, 12); }
-
-async function authorize(request: NextRequest, response: NextResponse) {
-  const supabase = createRouteClient(request, response);
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-  const { data: profile } = await supabase.from("profiles").select("roles, active").eq("id", user.id).single();
-  return profile?.active && profile.roles.includes("admin") ? user : null;
-}
+import {
+  AdminActionError,
+  createAdminAccount,
+  deleteAdminAccount,
+  resetAdminPassword,
+  updateAdminAccount,
+} from "@/lib/admin-users-core";
+import {
+  adminUserStore,
+  authorizeAdmin,
+  generatePassword,
+  isSameOriginMutation,
+  isValidEmail,
+  listAdminUsers,
+  normalizeDisplayName,
+  normalizeEmail,
+  safeError,
+  validatePassword,
+  validRoles,
+} from "@/lib/admin-users-server";
+import type { Role } from "@/lib/admin-users";
 
 function responseWithCookies(body: object, status: number, source: NextResponse) {
   const response = NextResponse.json(body, { status });
@@ -25,39 +27,155 @@ function responseWithCookies(body: object, status: number, source: NextResponse)
   return response;
 }
 
-function adminClient() {
-  return createSupabaseClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
+function jsonError(message: string, code: string, status: number, source: NextResponse) {
+  return responseWithCookies({ error: message, code }, status, source);
+}
+
+async function requireAuthorized(request: NextRequest, sessionResponse: NextResponse) {
+  const admin = await authorizeAdmin(request, sessionResponse);
+  if (!admin) return { admin: null, error: jsonError("غير مصرح لك.", "E_FORBIDDEN", 403, sessionResponse) };
+  return { admin, error: null };
+}
+
+function mutationAllowed(request: NextRequest, sessionResponse: NextResponse) {
+  if (isSameOriginMutation(request)) return null;
+  return jsonError("رُفض الطلب لأن مصدره غير مطابق للتطبيق.", "E_ORIGIN", 403, sessionResponse);
+}
+
+export async function GET(request: NextRequest) {
+  const sessionResponse = NextResponse.next();
+  const { error } = await requireAuthorized(request, sessionResponse);
+  if (error) return error;
+  try {
+    return responseWithCookies({ users: await listAdminUsers() }, 200, sessionResponse);
+  } catch (caught) {
+    const safe = safeError(caught);
+    return jsonError(safe.message, safe.code, safe.status, sessionResponse);
+  }
 }
 
 export async function POST(request: NextRequest) {
   const sessionResponse = NextResponse.next();
-  const caller = await authorize(request, sessionResponse);
-  if (!caller) return responseWithCookies({ error: "غير مصرح لك." }, 403, sessionResponse);
-  const body: unknown = await request.json();
-  if (!isCreateBody(body)) return responseWithCookies({ error: "البيانات المدخلة غير صحيحة." }, 400, sessionResponse);
-  const password = generatePassword(); const admin = adminClient();
-  const { data: created, error: createError } = await admin.auth.admin.createUser({ email: body.email, password, email_confirm: true });
-  if (createError || !created.user) return responseWithCookies({ error: "تعذر إنشاء المستخدم." }, 400, sessionResponse);
-  const { data: profile, error: profileError } = await admin.from("profiles").insert({ id: created.user.id, display_name: body.displayName, roles: body.roles, must_change_password: true }).select().single();
-  if (profileError || !profile) { await admin.auth.admin.deleteUser(created.user.id); return responseWithCookies({ error: "تعذر إنشاء ملف المستخدم." }, 400, sessionResponse); }
-  return responseWithCookies({ profile, password }, 200, sessionResponse);
+  const originError = mutationAllowed(request, sessionResponse);
+  if (originError) return originError;
+  const { admin: actor, error } = await requireAuthorized(request, sessionResponse);
+  if (error || !actor) return error;
+  try {
+    const body: unknown = await request.json();
+    if (!isCreateBody(body)) return jsonError("البيانات المدخلة غير صحيحة.", "E_INVALID_INPUT", 400, sessionResponse);
+    const email = normalizeEmail(body.email);
+    const displayName = normalizeDisplayName(body.displayName);
+    const password = body.passwordMode === "generated" ? generatePassword() : body.temporaryPassword.trim();
+    if (!isValidEmail(email) || displayName.length === 0 || !validatePassword(password)) {
+      return jsonError("البيانات المدخلة غير صحيحة.", "E_INVALID_INPUT", 400, sessionResponse);
+    }
+    const result = await createAdminAccount(adminUserStore(), actor.id, { email, displayName, roles: body.roles, password });
+    return responseWithCookies(result, 200, sessionResponse);
+  } catch (caught) {
+    const safe = safeError(caught);
+    return jsonError(safe.message, safe.code, safe.status, sessionResponse);
+  }
 }
 
 export async function PATCH(request: NextRequest) {
   const sessionResponse = NextResponse.next();
-  const caller = await authorize(request, sessionResponse);
-  if (!caller) return responseWithCookies({ error: "غير مصرح لك." }, 403, sessionResponse);
-  const body: unknown = await request.json();
-  if (!isUpdateBody(body)) return responseWithCookies({ error: "البيانات المدخلة غير صحيحة." }, 400, sessionResponse);
-  const changes: Database["public"]["Tables"]["profiles"]["Update"] = {};
-  if (typeof body.active === "boolean") changes.active = body.active;
-  if (body.roles) changes.roles = body.roles;
-  const { data: profile, error } = await adminClient().from("profiles").update(changes).eq("id", body.id).select().single();
-  if (error || !profile) return responseWithCookies({ error: "تعذر حفظ التغييرات." }, 400, sessionResponse);
-  return responseWithCookies({ profile }, 200, sessionResponse);
+  const originError = mutationAllowed(request, sessionResponse);
+  if (originError) return originError;
+  const { admin: actor, error } = await requireAuthorized(request, sessionResponse);
+  if (error || !actor) return error;
+  try {
+    const body: unknown = await request.json();
+    if (isResetPasswordBody(body)) return resetPassword(actor.id, body, sessionResponse);
+    if (!isUpdateBody(body)) return jsonError("البيانات المدخلة غير صحيحة.", "E_INVALID_INPUT", 400, sessionResponse);
+    return updateUser(actor.id, body, sessionResponse);
+  } catch (caught) {
+    const safe = safeError(caught);
+    return jsonError(safe.message, safe.code, safe.status, sessionResponse);
+  }
 }
 
-type CreateBody = { email: string; displayName: string; roles: Role[] };
-function isCreateBody(value: unknown): value is CreateBody { if (typeof value !== "object" || value === null) return false; const body = value as Record<string, unknown>; return typeof body.email === "string" && body.email.length > 0 && typeof body.displayName === "string" && body.displayName.length > 0 && validRoles(body.roles); }
-type UpdateBody = { id: string; active?: boolean; roles?: Role[] };
-function isUpdateBody(value: unknown): value is UpdateBody { if (typeof value !== "object" || value === null) return false; const body = value as Record<string, unknown>; return typeof body.id === "string" && body.id.length > 0 && (typeof body.active === "boolean" || validRoles(body.roles)); }
+export async function DELETE(request: NextRequest) {
+  const sessionResponse = NextResponse.next();
+  const originError = mutationAllowed(request, sessionResponse);
+  if (originError) return originError;
+  const { admin: actor, error } = await requireAuthorized(request, sessionResponse);
+  if (error || !actor) return error;
+  try {
+    const body: unknown = await request.json();
+    if (!isDeleteBody(body)) return jsonError("سبب الحذف مطلوب.", "E_INVALID_INPUT", 400, sessionResponse);
+    if (body.id === actor.id) return jsonError("لا يمكن للأدمن حذف حسابه.", "E_SELF_DELETE", 409, sessionResponse);
+
+    const result = await deleteAdminAccount(adminUserStore(), actor.id, body);
+    return responseWithCookies(result, 200, sessionResponse);
+  } catch (caught) {
+    if (caught instanceof AdminActionError && caught.code === "E_HAS_HISTORY") {
+      return responseWithCookies({ error: "لا يمكن حذف حساب له سجل تاريخي. عطّله بدلًا من ذلك.", code: caught.code, references: caught.details.references ?? [] }, 409, sessionResponse);
+    }
+    const safe = safeError(caught);
+    return jsonError(safe.message, safe.code, safe.status, sessionResponse);
+  }
+}
+
+async function updateUser(actorId: string, body: UpdateBody, sessionResponse: NextResponse) {
+  let nextEmail: string | null = null;
+  if (body.email) {
+    nextEmail = normalizeEmail(body.email);
+    if (!isValidEmail(nextEmail)) return jsonError("البريد غير صالح.", "E_INVALID_INPUT", 400, sessionResponse);
+  }
+  let displayName: string | undefined;
+  if (typeof body.displayName === "string") {
+    displayName = normalizeDisplayName(body.displayName);
+    if (displayName.length === 0) return jsonError("الاسم غير صالح.", "E_INVALID_INPUT", 400, sessionResponse);
+  }
+  const result = await updateAdminAccount(adminUserStore(), actorId, { ...body, displayName, email: nextEmail ?? undefined });
+  return responseWithCookies(result, 200, sessionResponse);
+}
+
+async function resetPassword(actorId: string, body: ResetPasswordBody, sessionResponse: NextResponse) {
+  const password = body.passwordMode === "generated" ? generatePassword() : body.temporaryPassword.trim();
+  if (!validatePassword(password)) return jsonError("كلمة المرور المؤقتة غير قوية بما يكفي.", "E_WEAK_PASSWORD", 400, sessionResponse);
+  const store = adminUserStore();
+  const result = await resetAdminPassword(store, actorId, { id: body.id, password });
+  return responseWithCookies(result, 200, sessionResponse);
+}
+
+type CreateBody = { email: string; displayName: string; roles: Role[]; passwordMode: "manual" | "generated"; temporaryPassword: string };
+function isCreateBody(value: unknown): value is CreateBody {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.email === "string"
+    && typeof body.displayName === "string"
+    && validRoles(body.roles)
+    && (body.passwordMode === "manual" || body.passwordMode === "generated")
+    && (body.passwordMode === "generated" || typeof body.temporaryPassword === "string");
+}
+
+type UpdateBody = { id: string; displayName?: string; email?: string; previousEmail?: string; roles?: Role[]; active?: boolean; reason?: string };
+function isUpdateBody(value: unknown): value is UpdateBody {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.id === "string"
+    && body.id.length > 0
+    && (typeof body.displayName === "string" || typeof body.email === "string" || validRoles(body.roles) || typeof body.active === "boolean")
+    && (body.roles === undefined || validRoles(body.roles))
+    && (body.reason === undefined || typeof body.reason === "string")
+    && (body.previousEmail === undefined || typeof body.previousEmail === "string");
+}
+
+type ResetPasswordBody = { action: "resetPassword"; id: string; passwordMode: "manual" | "generated"; temporaryPassword: string };
+function isResetPasswordBody(value: unknown): value is ResetPasswordBody {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return body.action === "resetPassword"
+    && typeof body.id === "string"
+    && body.id.length > 0
+    && (body.passwordMode === "manual" || body.passwordMode === "generated")
+    && (body.passwordMode === "generated" || typeof body.temporaryPassword === "string");
+}
+
+type DeleteBody = { id: string; reason: string };
+function isDeleteBody(value: unknown): value is DeleteBody {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.id === "string" && body.id.length > 0 && typeof body.reason === "string" && body.reason.trim().length >= 4;
+}

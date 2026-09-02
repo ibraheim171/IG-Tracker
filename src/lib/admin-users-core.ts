@@ -1,0 +1,447 @@
+import type { AdminAuditOperation, AdminAuditPhase, AdminUser, AuditValues, Role } from "./admin-users";
+
+export type AdminProfile = {
+  id: string;
+  display_name: string;
+  roles: Role[];
+  active: boolean;
+  must_change_password: boolean;
+  created_at: string;
+};
+
+export type AdminAuthUser = {
+  id: string;
+  email?: string;
+  last_sign_in_at?: string | null;
+};
+
+export type DeletionReference = { label: string; count: number };
+
+export type AdminActionErrorCode =
+  | "E_AUTH_CREATE"
+  | "E_AUTH_DELETE"
+  | "E_AUTH_EMAIL"
+  | "E_AUTH_LIST"
+  | "E_AUTH_PASSWORD"
+  | "E_AUTH_STATUS"
+  | "E_AUDIT_WRITE"
+  | "E_DUPLICATE_EMAIL"
+  | "E_HAS_HISTORY"
+  | "E_LAST_ADMIN"
+  | "E_PROFILE_CREATE"
+  | "E_PROFILE_DELETE"
+  | "E_PROFILE_NOT_FOUND"
+  | "E_PROFILE_PASSWORD_FLAG"
+  | "E_PROFILE_UPDATE"
+  | "E_SELF_DELETE"
+  | "E_SELF_DEMOTE"
+  | "E_SELF_DISABLE"
+  | "E_WEAK_PASSWORD";
+
+export class AdminActionError extends Error {
+  readonly code: AdminActionErrorCode;
+  readonly details: { references?: DeletionReference[] };
+
+  constructor(
+    code: AdminActionErrorCode,
+    details: { references?: DeletionReference[] } = {},
+  ) {
+    super(code);
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export type AdminUserStore = {
+  assertNotLastActiveAdmin(target: AdminProfile, nextRoles: Role[], nextActive: boolean): Promise<void>;
+  createAuthUser(input: { email: string; password: string; displayName: string }): Promise<AdminAuthUser>;
+  createProfile(input: { id: string; displayName: string; roles: Role[] }): Promise<AdminProfile>;
+  deleteAuthUser(id: string): Promise<void>;
+  deleteProfile(id: string): Promise<void>;
+  findAuthUserByEmail(email: string): Promise<AdminAuthUser | null>;
+  getAuthUserById(id: string): Promise<AdminAuthUser | null>;
+  getProfile(id: string): Promise<AdminProfile>;
+  listDeletionReferences(userId: string): Promise<DeletionReference[]>;
+  logAudit(input: {
+    actorId: string;
+    targetUserId: string;
+    operation: AdminAuditOperation;
+    actionId?: string;
+    actionPhase?: AdminAuditPhase;
+    diagnosticCode?: AdminActionErrorCode;
+    reason?: string;
+    beforeValues?: AuditValues;
+    afterValues?: AuditValues;
+  }): Promise<void>;
+  logAuditBatch(inputs: Array<{
+    actorId: string;
+    targetUserId: string;
+    operation: AdminAuditOperation;
+    actionId?: string;
+    actionPhase?: AdminAuditPhase;
+    diagnosticCode?: AdminActionErrorCode;
+    reason?: string;
+    beforeValues?: AuditValues;
+    afterValues?: AuditValues;
+  }>): Promise<void>;
+  setProfileMustChangePassword(id: string, mustChangePassword: boolean): Promise<AdminProfile>;
+  toAdminUser(profile: AdminProfile, authUser?: AdminAuthUser | null): AdminUser;
+  updateAuthEmail(id: string, email: string): Promise<AdminAuthUser>;
+  updateAuthPassword(id: string, password: string): Promise<void>;
+  updateAuthStatus(id: string, active: boolean): Promise<void>;
+  updateProfile(id: string, changes: Partial<Pick<AdminProfile, "active" | "display_name" | "roles">>): Promise<AdminProfile>;
+};
+
+export function isAuthorizedAdminProfile(profile: Pick<AdminProfile, "active" | "must_change_password" | "roles"> | null | undefined) {
+  return Boolean(profile?.active && !profile.must_change_password && profile.roles.includes("admin"));
+}
+
+export type ProtectedProfileIssueCode = "E_SESSION" | "E_ACCOUNT_DISABLED" | "PASSWORD_CHANGE_REQUIRED";
+
+export function getProtectedProfileIssue(
+  profile: Pick<AdminProfile, "active" | "must_change_password"> | null | undefined,
+  options: { allowPasswordChange?: boolean } = {},
+): ProtectedProfileIssueCode | null {
+  if (!profile) return "E_SESSION";
+  if (!profile.active) return "E_ACCOUNT_DISABLED";
+  if (profile.must_change_password && !options.allowPasswordChange) return "PASSWORD_CHANGE_REQUIRED";
+  return null;
+}
+
+export function isActiveProfileAllowed(profile: Pick<AdminProfile, "active"> | null | undefined) {
+  return Boolean(profile?.active);
+}
+
+export function isProtectedProfileAllowed(profile: Pick<AdminProfile, "active" | "must_change_password"> | null | undefined) {
+  return getProtectedProfileIssue(profile) === null;
+}
+
+export function sanitizeAuditValues(values: AuditValues): AuditValues {
+  return Object.fromEntries(
+    Object.entries(values)
+      .filter(([key]) => !/(password|token|secret|key)/i.test(key))
+      .map(([key, value]) => [key, sanitizeAuditJson(value)]),
+  ) as AuditValues;
+}
+
+function sanitizeAuditJson(value: AuditValues[string]): AuditValues[string] {
+  if (Array.isArray(value)) return value.map((item) => sanitizeAuditJson(item));
+  if (value && typeof value === "object") return sanitizeAuditValues(value as AuditValues);
+  return value;
+}
+
+export async function createAdminAccount(
+  store: AdminUserStore,
+  actorId: string,
+  input: { email: string; displayName: string; roles: Role[]; password: string },
+) {
+  if (await store.findAuthUserByEmail(input.email)) throw new AdminActionError("E_DUPLICATE_EMAIL");
+  let authUser: AdminAuthUser | null = null;
+  let profile: AdminProfile | null = null;
+  try {
+    authUser = await store.createAuthUser(input);
+    profile = await store.createProfile({ id: authUser.id, displayName: input.displayName, roles: input.roles });
+    await store.logAudit({
+      actorId,
+      targetUserId: authUser.id,
+      operation: "create_user",
+      afterValues: sanitizeAuditValues({
+        email: input.email,
+        display_name: input.displayName,
+        roles: input.roles,
+        active: true,
+        must_change_required: true,
+      }),
+    });
+    return { user: store.toAdminUser(profile, authUser), temporaryPassword: input.password };
+  } catch (caught) {
+    if (profile) await settle(() => store.deleteProfile(profile!.id));
+    if (authUser) await settle(() => store.deleteAuthUser(authUser!.id));
+    if (caught instanceof AdminActionError) throw caught;
+    throw new AdminActionError(profile ? "E_AUDIT_WRITE" : authUser ? "E_PROFILE_CREATE" : "E_AUTH_CREATE");
+  }
+}
+
+export async function deleteAdminAccount(store: AdminUserStore, actorId: string, input: { id: string; reason: string }) {
+  if (input.id === actorId) throw new AdminActionError("E_SELF_DELETE");
+  const target = await store.getProfile(input.id);
+  await store.assertNotLastActiveAdmin(target, [], false);
+  const references = await store.listDeletionReferences(input.id);
+  if (references.length > 0) throw new AdminActionError("E_HAS_HISTORY", { references });
+  const actionId = createAuditActionId();
+  const beforeValues = sanitizeAuditValues(safeProfileValues(target));
+  await store.logAudit({
+    actorId,
+    targetUserId: input.id,
+    operation: "delete_user",
+    actionId,
+    actionPhase: "started",
+    reason: input.reason,
+    beforeValues,
+  });
+  try {
+    await store.deleteAuthUser(input.id);
+  } catch (caught) {
+    await settle(() => store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "delete_user",
+      actionId,
+      actionPhase: "failed",
+      diagnosticCode: "E_AUTH_DELETE",
+      reason: input.reason,
+      beforeValues,
+    }));
+    throw toAdminActionError(caught, "E_AUTH_DELETE");
+  }
+  try {
+    await store.deleteProfile(input.id);
+  } catch {
+    await settle(() => store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "delete_user",
+      actionId,
+      actionPhase: "failed",
+      diagnosticCode: "E_PROFILE_DELETE",
+      reason: input.reason,
+      beforeValues,
+    }));
+    return { deleted: false, id: input.id, authDeleted: true, profileCleanupPending: true };
+  }
+  try {
+    await store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "delete_user",
+      actionId,
+      actionPhase: "succeeded",
+      reason: input.reason,
+      beforeValues,
+    });
+  } catch {
+    return { deleted: true, id: input.id, auditPending: true };
+  }
+  return { deleted: true, id: input.id };
+}
+
+export async function resetAdminPassword(
+  store: AdminUserStore,
+  actorId: string,
+  input: { id: string; password: string },
+) {
+  const target = await store.getProfile(input.id);
+  const actionId = createAuditActionId();
+  const beforeValues = { must_change_required: target.must_change_password };
+  const afterValues = { must_change_required: true };
+  await store.logAudit({
+    actorId,
+    targetUserId: input.id,
+    operation: "reset_password",
+    actionId,
+    actionPhase: "started",
+    beforeValues,
+    afterValues,
+  });
+  try {
+    await store.setProfileMustChangePassword(input.id, true);
+    await store.updateAuthPassword(input.id, input.password);
+  } catch (caught) {
+    const error = toAdminActionError(caught, caught instanceof AdminActionError && caught.code === "E_PROFILE_PASSWORD_FLAG" ? "E_PROFILE_PASSWORD_FLAG" : "E_AUTH_PASSWORD");
+    await settle(() => store.setProfileMustChangePassword(input.id, target.must_change_password));
+    await settle(() => store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "reset_password",
+      actionId,
+      actionPhase: "failed",
+      diagnosticCode: error.code,
+      beforeValues,
+      afterValues,
+    }));
+    throw error;
+  }
+  try {
+    await store.logAudit({
+      actorId,
+      targetUserId: input.id,
+      operation: "reset_password",
+      actionId,
+      actionPhase: "succeeded",
+      beforeValues,
+      afterValues,
+    });
+  } catch {
+    const [profile, authUser] = await Promise.all([store.getProfile(input.id), store.getAuthUserById(input.id)]);
+    return { user: store.toAdminUser(profile, authUser), temporaryPassword: input.password, auditPending: true };
+  }
+  const [profile, authUser] = await Promise.all([store.getProfile(input.id), store.getAuthUserById(input.id)]);
+  return { user: store.toAdminUser(profile, authUser), temporaryPassword: input.password };
+}
+
+export async function updateAdminAccount(
+  store: AdminUserStore,
+  actorId: string,
+  input: {
+    id: string;
+    displayName?: string;
+    email?: string;
+    previousEmail?: string;
+    roles?: Role[];
+    active?: boolean;
+    reason?: string;
+  },
+) {
+  const target = await store.getProfile(input.id);
+  if (input.id === actorId && input.roles && !input.roles.includes("admin")) throw new AdminActionError("E_SELF_DEMOTE");
+  if (input.id === actorId && input.active === false) throw new AdminActionError("E_SELF_DISABLE");
+
+  const nextRoles = input.roles ?? target.roles;
+  const nextActive = typeof input.active === "boolean" ? input.active : target.active;
+  await store.assertNotLastActiveAdmin(target, nextRoles, nextActive);
+
+  const audits: Array<{ operation: AdminAuditOperation; beforeValues: AuditValues; afterValues: AuditValues; reason?: string }> = [];
+  let emailChange: { currentEmail: string; nextEmail: string } | null = null;
+  if (input.email) {
+    const currentAuthUser = await store.getAuthUserById(input.id);
+    const currentEmail = currentAuthUser?.email ? normalizeAdminEmail(currentAuthUser.email) : "";
+    const nextEmail = normalizeAdminEmail(input.email);
+    if (!currentEmail) throw new AdminActionError("E_AUTH_EMAIL");
+    if (nextEmail !== currentEmail) {
+      const duplicate = await store.findAuthUserByEmail(nextEmail);
+      if (duplicate && duplicate.id !== input.id) throw new AdminActionError("E_DUPLICATE_EMAIL");
+      emailChange = { currentEmail, nextEmail };
+      audits.push({ operation: "update_email", beforeValues: { email: currentEmail }, afterValues: { email: nextEmail } });
+    }
+  }
+
+  const profileChanges: Partial<Pick<AdminProfile, "active" | "display_name" | "roles">> = {};
+
+  if (input.displayName && input.displayName !== target.display_name) {
+    profileChanges.display_name = input.displayName;
+    audits.push({ operation: "update_display_name", beforeValues: { display_name: target.display_name }, afterValues: { display_name: input.displayName } });
+  }
+  if (input.roles && !sameRoles(input.roles, target.roles)) {
+    profileChanges.roles = input.roles;
+    audits.push({ operation: "update_roles", beforeValues: { roles: target.roles }, afterValues: { roles: input.roles } });
+  }
+  if (typeof input.active === "boolean" && input.active !== target.active) {
+    profileChanges.active = input.active;
+    audits.push({
+      operation: input.active ? "activate_user" : "deactivate_user",
+      beforeValues: { active: target.active },
+      afterValues: { active: input.active },
+      reason: input.reason,
+    });
+  }
+
+  let profile = target;
+  const rollbackActions: Array<() => Promise<unknown>> = [];
+  try {
+    if (emailChange) {
+      try {
+        await store.updateAuthEmail(input.id, emailChange.nextEmail);
+        rollbackActions.push(() => store.updateAuthEmail(input.id, emailChange.currentEmail));
+      } catch (caught) {
+        throw toAdminActionError(caught, "E_AUTH_EMAIL");
+      }
+    }
+
+    if (typeof input.active === "boolean" && input.active !== target.active) {
+      try {
+        await store.updateAuthStatus(input.id, input.active);
+        rollbackActions.push(() => store.updateAuthStatus(input.id, target.active));
+      } catch (caught) {
+        throw toAdminActionError(caught, "E_AUTH_STATUS");
+      }
+    }
+
+    if (Object.keys(profileChanges).length > 0) {
+      try {
+        profile = await store.updateProfile(input.id, profileChanges);
+        rollbackActions.push(() => store.updateProfile(input.id, {
+          active: target.active,
+          display_name: target.display_name,
+          roles: target.roles,
+        }));
+      } catch (caught) {
+        throw toAdminActionError(caught, "E_PROFILE_UPDATE");
+      }
+    }
+
+    try {
+      await store.logAuditBatch(audits.map((audit) => ({ actorId, targetUserId: input.id, ...audit })));
+    } catch (caught) {
+      throw toAdminActionError(caught, "E_AUDIT_WRITE");
+    }
+  } catch (caught) {
+    await rollbackAll(rollbackActions);
+    if (caught instanceof AdminActionError) throw caught;
+    throw new AdminActionError("E_PROFILE_UPDATE");
+  }
+
+  const authUser = await store.getAuthUserById(input.id);
+  return { user: store.toAdminUser(profile, authUser) };
+}
+
+function normalizeAdminEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+function sameRoles(a: Role[], b: Role[]) {
+  if (a.length !== b.length) return false;
+  const bSet = new Set(b);
+  return a.every((role) => bSet.has(role));
+}
+
+function createAuditActionId() {
+  return globalThis.crypto.randomUUID();
+}
+
+function toAdminActionError(caught: unknown, fallback: AdminActionErrorCode) {
+  if (caught instanceof AdminActionError) return caught;
+  if (caught instanceof Error && isAdminActionErrorCode(caught.message)) return new AdminActionError(caught.message);
+  return new AdminActionError(fallback);
+}
+
+function isAdminActionErrorCode(value: string): value is AdminActionErrorCode {
+  return [
+    "E_AUTH_CREATE",
+    "E_AUTH_DELETE",
+    "E_AUTH_EMAIL",
+    "E_AUTH_LIST",
+    "E_AUTH_PASSWORD",
+    "E_AUTH_STATUS",
+    "E_AUDIT_WRITE",
+    "E_DUPLICATE_EMAIL",
+    "E_HAS_HISTORY",
+    "E_LAST_ADMIN",
+    "E_PROFILE_CREATE",
+    "E_PROFILE_DELETE",
+    "E_PROFILE_NOT_FOUND",
+    "E_PROFILE_PASSWORD_FLAG",
+    "E_PROFILE_UPDATE",
+    "E_SELF_DELETE",
+    "E_SELF_DEMOTE",
+    "E_SELF_DISABLE",
+    "E_WEAK_PASSWORD",
+  ].includes(value);
+}
+
+function safeProfileValues(profile: AdminProfile): AuditValues {
+  return { display_name: profile.display_name, roles: profile.roles, active: profile.active, must_change_required: profile.must_change_password };
+}
+
+async function rollbackAll(actions: Array<() => Promise<unknown>>) {
+  for (const action of [...actions].reverse()) {
+    await settle(action);
+  }
+}
+
+async function settle(action: () => Promise<unknown>) {
+  try {
+    await action();
+  } catch {
+    // Cleanup is best effort. The caller receives the original failure code.
+  }
+}
