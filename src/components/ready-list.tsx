@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition, type CSSProperties } from "react";
 import { ItemDrawer } from "@/components/item-drawer";
+import type { TeamMemberOption } from "@/lib/admin-create-item";
 import { isPublisherRole, safeHttpsHref } from "@/lib/item-permissions";
 import { createClient } from "@/lib/supabase/client";
 import type { DrawerPreview, ReadyItem, RoleName } from "@/lib/ui-data";
@@ -11,6 +12,7 @@ type Props = {
   initialItems: ReadyItem[];
   currentUserId: string;
   roles: RoleName[];
+  teamMembers?: TeamMemberOption[];
 };
 
 function trackStyle(color: string | null) {
@@ -34,7 +36,7 @@ function previewFromReady(item: ReadyItem): DrawerPreview {
   };
 }
 
-export function ReadyList({ initialItems, currentUserId, roles }: Props) {
+export function ReadyList({ initialItems, currentUserId, roles, teamMembers = [] }: Props) {
   const supabase = createClient();
   const [items, setItems] = useState(initialItems);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -122,7 +124,7 @@ export function ReadyList({ initialItems, currentUserId, roles }: Props) {
         </div>
       ) : null}
 
-      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} currentUserId={currentUserId} roles={roles} />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} />
     </main>
   );
 }

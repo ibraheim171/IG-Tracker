@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { AdminStageControl, type AdminStageCurrentSlot } from "@/components/admin-stage-control";
 import { useReferenceData } from "@/components/reference-data-provider";
+import type { AdminCreatedTrack, TeamMemberOption } from "@/lib/admin-create-item";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/lib/database.types";
@@ -53,6 +54,18 @@ type EditableState = {
   newPartner: string;
 };
 
+type AssignmentState = {
+  writer_id: string;
+  producer_id: string;
+  reviewer_id: string;
+};
+
+type TrackState = {
+  name: string;
+  color_hex: string;
+  sort_order: string;
+};
+
 type ConfirmDialog = {
   message: string;
   confirmLabel: string;
@@ -66,6 +79,7 @@ type Props = {
   onChanged?: () => void;
   currentUserId: string;
   roles: RoleName[];
+  teamMembers?: TeamMemberOption[];
   largeCaption?: boolean;
 };
 
@@ -84,6 +98,8 @@ const itemFieldKeys: EditableItemField[] = ["title", "track_id", "idea_type_id",
 const itemFieldKeySet = new Set<EditableItemField>(itemFieldKeys);
 const itemSaveErrorMessage = "تعذر حفظ التعديلات. حاول مجددًا. رمز التشخيص: ITEM_SAVE.";
 const partnersSaveErrorMessage = "تعذر حفظ الشركاء. حاول مجددًا. رمز التشخيص: PARTNERS_SAVE.";
+const assignmentsSaveErrorMessage = "تعذر حفظ تعيينات المادة. حاول مجددًا. رمز التشخيص: ASSIGNMENTS_SAVE.";
+const emptyTrack: TrackState = { name: "", color_hex: "#1E8F8B", sort_order: "" };
 
 function profileName(value: ParticipantRecord["profiles"]) {
   if (Array.isArray(value)) return value[0]?.display_name ?? "—";
@@ -115,6 +131,24 @@ function buildEditable(item: ItemRow, partnerRows: PartnerRecord[]): EditableSta
     partnerIds: partnerRows.map((row) => row.partner_id.toString()),
     newPartner: "",
   };
+}
+
+function buildAssignments(participants: ParticipantRecord[]): AssignmentState {
+  return {
+    writer_id: participants.find((row) => row.part === "writer")?.user_id ?? "",
+    producer_id: participants.find((row) => row.part === "producer")?.user_id ?? "",
+    reviewer_id: participants.find((row) => row.part === "reviewer")?.user_id ?? "",
+  };
+}
+
+function memberLabel(member: TeamMemberOption) {
+  return `${member.display_name} — ${member.email}`;
+}
+
+function membersByRole(teamMembers: TeamMemberOption[], role: "writer" | "producer" | "reviewer") {
+  return teamMembers
+    .filter((member) => member.roles.includes(role))
+    .sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
 }
 
 function buildItemPayload(editable: EditableState, fields: EditableItemField[]) {
@@ -164,7 +198,7 @@ function findIdeaType(ideaTypes: IdeaTypeOption[], item: ItemRow | DrawerPreview
   return ideaTypes.find((ideaType) => ideaType.id === item?.idea_type_id) ?? null;
 }
 
-export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, largeCaption }: Props) {
+export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, teamMembers = [], largeCaption }: Props) {
   const { tracks, ideaTypes, partners, refreshReferenceData } = useReferenceData();
   const supabase = useMemo(() => createClient(), []);
   const loadSequence = useRef(0);
@@ -184,6 +218,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const confirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
   const [editable, setEditable] = useState<EditableState | null>(null);
+  const [assignments, setAssignments] = useState<AssignmentState>({ writer_id: "", producer_id: "", reviewer_id: "" });
+  const [trackForm, setTrackForm] = useState<TrackState>(emptyTrack);
+  const [showTrackForm, setShowTrackForm] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -193,6 +230,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const [rejectNote, setRejectNote] = useState("");
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [trackSaving, setTrackSaving] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const preview = initialItem?.id === itemId ? initialItem : null;
@@ -218,6 +256,10 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const captionText = item?.caption ?? preview?.caption ?? null;
   const writerDeliveryUrl = item?.writer_delivery_url ?? null;
   const productionFileUrl = item?.production_file_url ?? preview?.production_file_url ?? null;
+  const writers = useMemo(() => membersByRole(teamMembers, "writer"), [teamMembers]);
+  const producers = useMemo(() => membersByRole(teamMembers, "producer"), [teamMembers]);
+  const reviewers = useMemo(() => membersByRole(teamMembers, "reviewer"), [teamMembers]);
+  const memberById = useMemo(() => new Map(teamMembers.map((member) => [member.id, member])), [teamMembers]);
 
   useEffect(() => {
     latestItemRef.current = item;
@@ -272,6 +314,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         hasUserEditedFields.current = false;
         setDetails(null);
         setEditable(null);
+        setAssignments({ writer_id: "", producer_id: "", reviewer_id: "" });
+        setTrackForm(emptyTrack);
+        setShowTrackForm(false);
         setLoadState("idle");
         setLoadError(null);
         setMessage(null);
@@ -291,6 +336,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setLoadState("loading");
       setDetails(null);
       setEditable(null);
+      setAssignments({ writer_id: "", producer_id: "", reviewer_id: "" });
+      setTrackForm(emptyTrack);
+      setShowTrackForm(false);
       setFailedAdvance(null);
       setOverrideReason("");
       setRejectNote("");
@@ -321,6 +369,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         lastSavedSignatureRef.current = editableSignature(nextEditable, saveFieldsFor(payload.details.item, payload.details.participants));
         setDetails(payload.details);
         setEditable(nextEditable);
+        setAssignments(buildAssignments(payload.details.participants));
         setLoadState("ready");
       } catch (error) {
         if (sequence !== loadSequence.current) return;
@@ -591,6 +640,66 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     onChanged?.();
   }
 
+  async function saveAssignments() {
+    if (!item || item.is_archived || !isAdmin || !assignments.writer_id) return;
+
+    const response = await fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        writer_id: assignments.writer_id,
+        producer_id: assignments.producer_id || null,
+        reviewer_id: assignments.reviewer_id || null,
+      }),
+    });
+    const result = (await response.json().catch(() => ({}))) as { participants?: Pick<ParticipantRecord, "user_id" | "part">[]; error?: string };
+    if (!response.ok || !result.participants) {
+      setMessage(result.error ?? assignmentsSaveErrorMessage);
+      return;
+    }
+
+    const nextParticipants: ParticipantRecord[] = result.participants.map((row) => ({
+      ...row,
+      profiles: { display_name: memberById.get(row.user_id)?.display_name ?? "—" },
+    }));
+    setDetails((current) => current && current.item.id === item.id ? { ...current, participants: nextParticipants } : current);
+    setAssignments(buildAssignments(nextParticipants));
+    setMessage("تم حفظ تعيينات الفريق.");
+    onChanged?.();
+  }
+
+  async function createTrackForDrawer() {
+    if (trackSaving || !trackForm.name.trim() || !editable || !isAdmin) return;
+    setTrackSaving(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/admin/tracks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          name: trackForm.name,
+          color_hex: trackForm.color_hex,
+          sort_order: trackForm.sort_order ? Number(trackForm.sort_order) : null,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { track?: AdminCreatedTrack; error?: string };
+      if (!response.ok || !payload.track) {
+        setMessage(payload.error ?? "تعذر إنشاء المسار. رمز التشخيص: TRACK_CREATE_DRAWER.");
+        return;
+      }
+
+      await refreshReferenceData();
+      updateEditable({ track_id: payload.track.id.toString() });
+      setTrackForm(emptyTrack);
+      setShowTrackForm(false);
+      setMessage("تمت إضافة المسار واختياره.");
+    } finally {
+      setTrackSaving(false);
+    }
+  }
+
   function runAction(action: () => Promise<unknown>) {
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
@@ -713,6 +822,19 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               </section>
             ) : null}
 
+            {item && isAdmin && teamMembers.length > 0 && canEdit(item) ? (
+              <section className="drawer-section stack">
+                <h3>تعيينات الفريق</h3>
+                <p className="muted">هذا القسم للأدمن فقط؛ الحفظ يراجع أدوار الحسابات النشطة داخل قاعدة البيانات.</p>
+                <div className="form-grid">
+                  <label className="field">الكاتب المسؤول<select className="input" required value={assignments.writer_id} onChange={(event) => setAssignments((current) => ({ ...current, writer_id: event.target.value }))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                  <label className="field">المنتج المسؤول<select className="input" value={assignments.producer_id} onChange={(event) => setAssignments((current) => ({ ...current, producer_id: event.target.value }))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                </div>
+                <label className="field">المراجع المسؤول<select className="input" value={assignments.reviewer_id} onChange={(event) => setAssignments((current) => ({ ...current, reviewer_id: event.target.value }))}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                <button className="button button-secondary" type="button" disabled={!assignments.writer_id || actionDisabled} onClick={() => runAction(saveAssignments)}>حفظ التعيينات</button>
+              </section>
+            ) : null}
+
             <section className="steps">
               {pipeline.map((step) => {
                 const currentIndex = order.indexOf(displayItem.status);
@@ -729,9 +851,26 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 <p className="muted">حقول النص للكاتب المعيّن، ورابط الإنتاج للمنتج المعيّن، والشركاء والموعد لمسؤول النشر.</p>
                 {canEditField("title") ? <label className="field">العنوان<input className="input" value={editable.title} onChange={(event) => updateEditable({ title: event.target.value })} /></label> : readOnlyField("العنوان", item.title)}
                 <div className="form-grid">
-                  {canEditField("track_id") ? <label className="field">المسار<select className="input" value={editable.track_id} onChange={(event) => updateEditable({ track_id: event.target.value })}><option value="">—</option>{tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label> : readOnlyField("المسار", trackName)}
+                  {canEditField("track_id") ? (
+                    <div className="field">
+                      <span>المسار</span>
+                      <select className="input" value={editable.track_id} onChange={(event) => updateEditable({ track_id: event.target.value })}><option value="">—</option>{tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select>
+                      {isAdmin ? <button className="button button-secondary" type="button" disabled={actionDisabled || trackSaving} onClick={() => setShowTrackForm((current) => !current)}>إضافة مسار جديد</button> : null}
+                    </div>
+                  ) : readOnlyField("المسار", trackName)}
                   {canEditField("idea_type_id") ? <label className="field">نوع الفكرة<select className="input" value={editable.idea_type_id} onChange={(event) => updateEditable({ idea_type_id: event.target.value })}><option value="">—</option>{ideaTypes.map((ideaType) => <option key={ideaType.id} value={ideaType.id}>{ideaType.name}</option>)}</select></label> : readOnlyField("نوع الفكرة", ideaTypeName)}
                 </div>
+                {showTrackForm && isAdmin ? (
+                  <fieldset className="drawer-partners stack">
+                    <legend>إضافة مسار جديد</legend>
+                    <div className="form-grid">
+                      <label className="field">اسم المسار<input className="input" value={trackForm.name} onChange={(event) => setTrackForm((current) => ({ ...current, name: event.target.value }))} /></label>
+                      <label className="field">لون المسار<input className="input" type="color" value={trackForm.color_hex} onChange={(event) => setTrackForm((current) => ({ ...current, color_hex: event.target.value }))} /></label>
+                    </div>
+                    <label className="field">ترتيب العرض<input className="input" inputMode="numeric" value={trackForm.sort_order} onChange={(event) => setTrackForm((current) => ({ ...current, sort_order: event.target.value.replace(/\D/g, "") }))} /></label>
+                    <button className="button button-secondary" type="button" disabled={!trackForm.name.trim() || actionDisabled || trackSaving} onClick={() => runAction(createTrackForDrawer)}>حفظ المسار</button>
+                  </fieldset>
+                ) : null}
                 {hasApprovalHistory ? <p className="soft-banner">هذا النص معتمَد — تعديله لا يُلغي الاعتماد تلقائياً. أبلغ المراجع إن كان التغيير جوهرياً.</p> : null}
                 {canEditField("caption") ? <label className="field">الكابشن<textarea className={`input textarea ${largeCaption ? "textarea-large" : ""}`} value={editable.caption} onChange={(event) => updateEditable({ caption: event.target.value })} /></label> : readOnlyField("الكابشن", item.caption)}
                 {canEditField("notes") ? <label className="field">الملاحظات<textarea className="input textarea" value={editable.notes} onChange={(event) => updateEditable({ notes: event.target.value })} /></label> : readOnlyField("الملاحظات", item.notes)}

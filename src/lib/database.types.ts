@@ -1509,6 +1509,39 @@ export type Database = {
         }
         Returns: Json
       }
+      admin_create_item: {
+        Args: { p_fields: Json }
+        Returns: Database["public"]["Tables"]["items"]["Row"]
+        SetofOptions: {
+          from: "*"
+          to: "items"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      admin_create_track: {
+        Args: {
+          p_color_hex?: string
+          p_name: string
+          p_sort_order?: number | null
+        }
+        Returns: Database["public"]["Tables"]["tracks"]["Row"]
+        SetofOptions: {
+          from: "*"
+          to: "tracks"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      admin_save_item_assignments: {
+        Args: {
+          p_item: string
+          p_producer?: string | null
+          p_reviewer?: string | null
+          p_writer: string
+        }
+        Returns: Json
+      }
       save_item_fields: {
         Args: { p_fields: Json; p_item: string }
         Returns: Database["public"]["Tables"]["items"]["Row"]

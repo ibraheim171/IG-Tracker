@@ -2,26 +2,31 @@
 
 import { useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
+import { AdminCreateItemModal } from "@/components/admin-create-item-modal";
 import { ItemDrawer } from "@/components/item-drawer";
 import { useReferenceData } from "@/components/reference-data-provider";
+import type { TeamMemberOption } from "@/lib/admin-create-item";
 import type { BoardItem, BoardSlot, RoleName } from "@/lib/ui-data";
-import { arabicDayName, formatHebronDateTime, relativeDayLabel } from "@/lib/ui-data";
+import { arabicDayName, formatHebronDateTime, isAdminRole, relativeDayLabel } from "@/lib/ui-data";
 
 type Props = {
   slots: BoardSlot[];
   items: BoardItem[];
   currentUserId: string;
   roles: RoleName[];
+  teamMembers: TeamMemberOption[];
 };
 
 function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function SlotsBoard({ slots, items, currentUserId, roles }: Props) {
+export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: Props) {
   const { tracks, ideaTypes } = useReferenceData();
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const isAdmin = isAdminRole(roles);
   const enrichedItems = useMemo(() => items.map((item) => {
     const track = tracks.find((candidate) => candidate.id === item.track_id);
     const ideaType = ideaTypes.find((candidate) => candidate.id === item.idea_type_id);
@@ -60,6 +65,7 @@ export function SlotsBoard({ slots, items, currentUserId, roles }: Props) {
           <p className="eyebrow">الجدول</p>
           <h1>خطة النشر</h1>
         </div>
+        {isAdmin ? <button className="button" type="button" onClick={() => setCreateOpen(true)}>إضافة مادة</button> : null}
       </header>
       <div className="slot-days">
         {dateKeys.map((dateKey) => {
@@ -102,7 +108,17 @@ export function SlotsBoard({ slots, items, currentUserId, roles }: Props) {
           );
         })}
       </div>
-      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} />
+      <AdminCreateItemModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={(createdItem) => {
+          setOpenItemId(createdItem.id);
+          router.refresh();
+        }}
+        slots={slots}
+        teamMembers={teamMembers}
+      />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} />
     </main>
   );
 }
