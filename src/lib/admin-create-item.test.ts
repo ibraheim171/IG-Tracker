@@ -12,6 +12,7 @@ const assignmentsRoute = readFileSync("src/app/api/admin/items/[itemId]/particip
 const slotsBoard = readFileSync("src/components/slots-board.tsx", "utf8");
 const createModal = readFileSync("src/components/admin-create-item-modal.tsx", "utf8");
 const itemDrawer = readFileSync("src/components/item-drawer.tsx", "utf8");
+const globalsCss = readFileSync("src/app/globals.css", "utf8");
 
 const uuidA = "11111111-1111-4111-8111-111111111111";
 const uuidB = "22222222-2222-4222-8222-222222222222";
@@ -150,6 +151,18 @@ test("UI exposes admin creation and track creation without window.confirm or sto
   for (const source of [slotsBoard, createModal, itemDrawer]) {
     assert.equal(/window\.confirm|localStorage|sessionStorage/.test(source), false);
   }
+});
+
+test("admin create item modal scrolls internally on small screens", () => {
+  assert.match(createModal, /className="confirm-panel create-item-panel stack"/);
+  const createPanelRule = globalsCss.match(/\.create-item-panel\s*\{[^}]+\}/)?.[0] ?? "";
+  assert.match(createPanelRule, /max-block-size:\s*calc\(100dvh - 1rem\)/);
+  assert.match(createPanelRule, /overflow-y:\s*auto/);
+  assert.match(createPanelRule, /overflow-x:\s*hidden/);
+  assert.match(createPanelRule, /overscroll-behavior:\s*contain/);
+  assert.match(createPanelRule, /touch-action:\s*pan-y/);
+  assert.match(createPanelRule, /-webkit-overflow-scrolling:\s*touch/);
+  assert.match(createPanelRule, /env\(safe-area-inset-bottom\)/);
 });
 
 test("admin item creation resolves new partners case-insensitively and rejects inactive duplicates", () => {

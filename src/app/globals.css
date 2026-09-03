@@ -333,6 +333,7 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .drawer, .confirm-panel { background: var(--card); color: var(--ink); border: 1px solid var(--rule); box-shadow: 0 1rem 3rem color-mix(in srgb, var(--ink) 18%, transparent); }
 .drawer { inline-size: 100%; max-block-size: 88dvh; overflow: auto; border-radius: 0.5rem 0.5rem 0 0; padding: 1rem; position: relative; }
 .confirm-panel { inline-size: min(100% - 2rem, 34rem); margin-inline: auto; margin-block-end: 1rem; border-radius: 0.5rem; padding: 1rem; }
+.create-item-panel { max-block-size: calc(100dvh - 1rem); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; padding-block-end: calc(1rem + env(safe-area-inset-bottom)); }
 .drawer-close { position: sticky; inset-block-start: 0; margin-inline-start: auto; z-index: 1; }
 .icon-button { inline-size: 44px; block-size: 44px; border: 1px solid var(--rule); border-radius: 0.5rem; background: var(--card); color: var(--ink); font-size: 1.4rem; }
 .drawer-head, .drawer-section { display: grid; gap: 0.75rem; border-block-end: 1px solid var(--rule); padding-block-end: 1rem; }
