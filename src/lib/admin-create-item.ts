@@ -33,6 +33,7 @@ export type AdminCreateTrackPayload = {
 
 export type AdminCreatedItem = Tables<"items">;
 export type AdminCreatedTrack = Tables<"tracks">;
+export type AssignableItemState = Pick<Tables<"items">, "status" | "is_archived">;
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
@@ -58,6 +59,11 @@ const allowedItemKeys = new Set([
 
 export function hasRole(roles: RoleName[], role: ParticipantPart) {
   return roles.includes(role);
+}
+
+export function canEditItemAssignments(item: AssignableItemState | null | undefined) {
+  if (!item || item.is_archived) return false;
+  return item.status !== "published" && item.status !== "cancelled";
 }
 
 function optionalText(value: unknown) {
@@ -180,7 +186,10 @@ export function safeRpcError(message: string | undefined, fallback: string) {
     "INVALID_PARTNER:",
     "INVALID_COLOR:",
     "DUPLICATE_TRACK:",
+    "INACTIVE_PARTNER:",
     "ARCHIVED_IMMUTABLE:",
+    "PUBLISHED_IMMUTABLE:",
+    "CANCELLED_IMMUTABLE:",
     "INVALID_DEFAULT:",
   ]) {
     const index = message.indexOf(marker);

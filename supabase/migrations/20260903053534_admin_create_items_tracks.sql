@@ -85,6 +85,7 @@ declare
   slot_id uuid;
   selected_partner_ids smallint[];
   created_partner_id smallint;
+  matched_partner public.partners;
   trimmed_new_partner text := null;
   expected_partner_count integer;
   actual_partner_count integer;
@@ -311,10 +312,29 @@ begin
   end if;
 
   if trimmed_new_partner is not null then
-    insert into public.partners (name, aliases, created_by)
-    values (trimmed_new_partner, array[trimmed_new_partner], auth.uid())
-    on conflict (name) do update set name = excluded.name
-    returning id into created_partner_id;
+    lock table public.partners in share row exclusive mode;
+
+    select * into matched_partner
+      from public.partners
+     where lower(name) = lower(trimmed_new_partner)
+     order by id
+     limit 1
+     for update;
+
+    if matched_partner.id is not null then
+      if not matched_partner.active then
+        raise exception 'INACTIVE_PARTNER: يوجد شريك معطّل بهذا الاسم';
+      end if;
+      created_partner_id := matched_partner.id;
+    else
+      insert into public.partners (name, aliases, created_by)
+      values (trimmed_new_partner, array[trimmed_new_partner], auth.uid())
+      returning id into created_partner_id;
+
+      if not exists (select 1 from public.partners where id = created_partner_id and active) then
+        raise exception 'INVALID_PARTNER: تعذر إنشاء شريك نشط';
+      end if;
+    end if;
   end if;
 
   if created_partner_id is not null then
@@ -359,6 +379,8 @@ begin
   select * into it from public.items where id = p_item for update;
   if it.id is null then raise exception 'ITEM_NOT_FOUND'; end if;
   if it.is_archived then raise exception 'ARCHIVED_IMMUTABLE: المادة في شهر مؤرشف'; end if;
+  if it.status = 'published' then raise exception 'PUBLISHED_IMMUTABLE: المادة منشورة ولا يمكن تغيير تعييناتها'; end if;
+  if it.status = 'cancelled' then raise exception 'CANCELLED_IMMUTABLE: المادة ملغاة ولا يمكن تغيير تعييناتها'; end if;
 
   perform 1
     from public.profiles
@@ -426,6 +448,89 @@ begin
       from public.item_participants
      where item_id = p_item
        and part in ('writer', 'producer', 'reviewer')
+  );
+end
+$$;
+
+create or replace function public.save_item_partners(
+  p_item uuid,
+  p_partner_ids smallint[] default '{}',
+  p_new_partner_name text default null
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  it public.items;
+  trimmed_name text := nullif(btrim(coalesce(p_new_partner_name, '')), '');
+  created_partner_id smallint;
+  matched_partner public.partners;
+  selected_ids smallint[];
+  expected_count integer;
+  actual_count integer;
+begin
+  perform public.assert_can_use_app();
+
+  if not public.can_publish_items() then
+    raise exception 'ROLE_REQUIRED: إدارة شركاء المادة تحتاج مسؤول النشر أو الأدمن';
+  end if;
+
+  select * into it from public.items where id = p_item for update;
+  if it.id is null then raise exception 'ITEM_NOT_FOUND'; end if;
+  if it.is_archived then raise exception 'ARCHIVED_IMMUTABLE: المادة في شهر مؤرشف'; end if;
+
+  if trimmed_name is not null then
+    lock table public.partners in share row exclusive mode;
+
+    select * into matched_partner
+      from public.partners
+     where lower(name) = lower(trimmed_name)
+     order by id
+     limit 1
+     for update;
+
+    if matched_partner.id is not null then
+      if not matched_partner.active then
+        raise exception 'INACTIVE_PARTNER: يوجد شريك معطّل بهذا الاسم';
+      end if;
+      created_partner_id := matched_partner.id;
+    else
+      insert into public.partners (name, aliases, created_by)
+      values (trimmed_name, array[trimmed_name], auth.uid())
+      returning id into created_partner_id;
+
+      if not exists (select 1 from public.partners where id = created_partner_id and active) then
+        raise exception 'INVALID_PARTNER: تعذر إنشاء شريك نشط';
+      end if;
+    end if;
+  end if;
+
+  select coalesce(array_agg(distinct id order by id), '{}')
+    into selected_ids
+    from unnest(coalesce(p_partner_ids, '{}') || coalesce(array[created_partner_id], '{}')) as ids(id)
+   where id is not null;
+
+  select coalesce(array_length(selected_ids, 1), 0) into expected_count;
+
+  select count(*) into actual_count
+    from public.partners
+   where id = any(selected_ids)
+     and active;
+
+  if actual_count <> expected_count then
+    raise exception 'INVALID_PARTNER: اختر شريكاً موجوداً ونشطاً';
+  end if;
+
+  delete from public.item_partners where item_id = p_item;
+
+  insert into public.item_partners (item_id, partner_id, added_by)
+  select p_item, id, auth.uid()
+    from unnest(selected_ids) as ids(id);
+
+  return jsonb_build_object(
+    'partner_ids', selected_ids,
+    'created_partner_id', created_partner_id
   );
 end
 $$;

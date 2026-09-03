@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { validateAdminCreateItemPayload, validateAdminCreateTrackPayload } from "./admin-create-item.ts";
+import { canEditItemAssignments, validateAdminCreateItemPayload, validateAdminCreateTrackPayload } from "./admin-create-item.ts";
 import { buildMyMaterials, type ParticipantItemRow } from "./my-materials-data.ts";
 
 const creationMigration = readFileSync("supabase/migrations/20260903053534_admin_create_items_tracks.sql", "utf8");
@@ -89,10 +89,23 @@ test("admin assignment edit RPC replaces operational assignments through trusted
   assert.match(creationMigration, /create or replace function public\.admin_save_item_assignments/);
   assert.match(creationMigration, /if not public\.is_admin\(\) then/);
   assert.match(creationMigration, /select \* into it from public\.items where id = p_item for update/);
+  assert.match(creationMigration, /if it\.is_archived then raise exception 'ARCHIVED_IMMUTABLE:/);
+  assert.match(creationMigration, /if it\.status = 'published' then raise exception 'PUBLISHED_IMMUTABLE:/);
+  assert.match(creationMigration, /if it\.status = 'cancelled' then raise exception 'CANCELLED_IMMUTABLE:/);
   assert.match(creationMigration, /where id in \(p_writer, p_producer, p_reviewer\)[\s\S]*order by id[\s\S]*for update/);
   assert.match(creationMigration, /from public\.item_participants[\s\S]*for update/);
   assert.match(creationMigration, /delete from public\.item_participants[\s\S]*part in \('writer', 'producer', 'reviewer'\)/);
   assert.match(creationMigration, /on conflict \(item_id, user_id, part\) do nothing/);
+});
+
+test("shared assignment edit logic and UI hide editor for historical item states", () => {
+  assert.equal(canEditItemAssignments({ status: "idea", is_archived: false }), true);
+  assert.equal(canEditItemAssignments({ status: "ready", is_archived: false }), true);
+  assert.equal(canEditItemAssignments({ status: "published", is_archived: false }), false);
+  assert.equal(canEditItemAssignments({ status: "cancelled", is_archived: false }), false);
+  assert.equal(canEditItemAssignments({ status: "idea", is_archived: true }), false);
+  assert.match(itemDrawer, /canEditItemAssignments\(item\)/);
+  assert.match(itemDrawer, /item && canEditAssignments/);
 });
 
 test("create and assignment routes are same-origin admin-only RPC wrappers without service role or direct writes", () => {
@@ -106,6 +119,7 @@ test("create and assignment routes are same-origin admin-only RPC wrappers witho
   assert.match(createItemRoute, /rpc\("admin_create_item"/);
   assert.match(createTrackRoute, /rpc\("admin_create_track"/);
   assert.match(assignmentsRoute, /rpc\("admin_save_item_assignments"/);
+  assert.match(assignmentsRoute, /PUBLISHED_IMMUTABLE|safeRpcError/);
 });
 
 test("track creation RPC is admin-only, server-generates slug, validates color, and closes direct browser writes", () => {
@@ -136,6 +150,31 @@ test("UI exposes admin creation and track creation without window.confirm or sto
   for (const source of [slotsBoard, createModal, itemDrawer]) {
     assert.equal(/window\.confirm|localStorage|sessionStorage/.test(source), false);
   }
+});
+
+test("admin item creation resolves new partners case-insensitively and rejects inactive duplicates", () => {
+  const createItemBlock = creationMigration.match(/create or replace function public\.admin_create_item\([\s\S]*?create or replace function public\.admin_save_item_assignments/)?.[0] ?? "";
+  assert.match(createItemBlock, /lock table public\.partners in share row exclusive mode/);
+  assert.match(createItemBlock, /where lower\(name\) = lower\(trimmed_new_partner\)/);
+  assert.match(createItemBlock, /for update/);
+  assert.match(createItemBlock, /if not matched_partner\.active then[\s\S]*INACTIVE_PARTNER/);
+  assert.match(createItemBlock, /created_partner_id := matched_partner\.id/);
+  assert.match(createItemBlock, /insert into public\.partners \(name, aliases, created_by\)/);
+  assert.doesNotMatch(createItemBlock, /on conflict \(name\) do update/);
+});
+
+test("save item partners is redefined with the same safe partner resolution", () => {
+  const savePartnersBlock = creationMigration.match(/create or replace function public\.save_item_partners\([\s\S]*?drop policy if exists no_direct_track_insert/)?.[0] ?? "";
+  assert.match(savePartnersBlock, /perform public\.assert_can_use_app\(\)/);
+  assert.match(savePartnersBlock, /public\.can_publish_items\(\)/);
+  assert.match(savePartnersBlock, /lock table public\.partners in share row exclusive mode/);
+  assert.match(savePartnersBlock, /where lower\(name\) = lower\(trimmed_name\)/);
+  assert.match(savePartnersBlock, /for update/);
+  assert.match(savePartnersBlock, /if not matched_partner\.active then[\s\S]*INACTIVE_PARTNER/);
+  assert.match(savePartnersBlock, /created_partner_id := matched_partner\.id/);
+  assert.match(savePartnersBlock, /insert into public\.partners \(name, aliases, created_by\)/);
+  assert.match(savePartnersBlock, /delete from public\.item_partners where item_id = p_item/);
+  assert.doesNotMatch(savePartnersBlock, /on conflict \(name\) do update/);
 });
 
 test("assigned users appear in my materials only through item_participants rows", () => {

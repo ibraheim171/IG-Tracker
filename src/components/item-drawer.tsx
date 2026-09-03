@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { AdminStageControl, type AdminStageCurrentSlot } from "@/components/admin-stage-control";
 import { useReferenceData } from "@/components/reference-data-provider";
-import type { AdminCreatedTrack, TeamMemberOption } from "@/lib/admin-create-item";
+import { canEditItemAssignments, type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/lib/database.types";
@@ -256,6 +256,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const captionText = item?.caption ?? preview?.caption ?? null;
   const writerDeliveryUrl = item?.writer_delivery_url ?? null;
   const productionFileUrl = item?.production_file_url ?? preview?.production_file_url ?? null;
+  const canEditAssignments = isAdmin && teamMembers.length > 0 && canEditItemAssignments(item);
   const writers = useMemo(() => membersByRole(teamMembers, "writer"), [teamMembers]);
   const producers = useMemo(() => membersByRole(teamMembers, "producer"), [teamMembers]);
   const reviewers = useMemo(() => membersByRole(teamMembers, "reviewer"), [teamMembers]);
@@ -822,7 +823,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               </section>
             ) : null}
 
-            {item && isAdmin && teamMembers.length > 0 && canEdit(item) ? (
+            {item && canEditAssignments ? (
               <section className="drawer-section stack">
                 <h3>تعيينات الفريق</h3>
                 <p className="muted">هذا القسم للأدمن فقط؛ الحفظ يراجع أدوار الحسابات النشطة داخل قاعدة البيانات.</p>

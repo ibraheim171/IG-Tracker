@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { safeRpcError } from "@/lib/admin-create-item";
 import { getItemPermissions } from "@/lib/item-permissions";
 import { requireActiveRouteProfile } from "@/lib/route-auth";
 
@@ -71,7 +72,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   });
 
   if (error) {
-    return responseWithCookies({ error: "تعذر حفظ الشركاء.", code: "E_PARTNERS_SAVE" }, 400, cookieResponse);
+    return responseWithCookies({
+      error: safeRpcError(error.message, "تعذر حفظ الشركاء. رمز التشخيص: PARTNERS_SAVE."),
+      code: "E_PARTNERS_SAVE",
+    }, 400, cookieResponse);
   }
 
   const { data: partners, error: readError } = await auth.supabase
