@@ -4,7 +4,7 @@ import test from "node:test";
 import { canEditItemAssignments, validateAdminCreateItemPayload, validateAdminCreateTrackPayload } from "./admin-create-item.ts";
 import { buildMyMaterials, type ParticipantItemRow } from "./my-materials-data.ts";
 
-const creationMigration = readFileSync("supabase/migrations/20260903053534_admin_create_items_tracks.sql", "utf8");
+const creationMigration = readFileSync("supabase/migrations/20260903071931_admin_create_items_tracks.sql", "utf8");
 const roleMigration = readFileSync("supabase/migrations/20260902131635_role_field_permissions.sql", "utf8");
 const draftWorkflowMigration = readFileSync("supabase/migrations/20260904131500_draft_workflow_ux.sql", "utf8");
 const createItemRoute = readFileSync("src/app/api/admin/items/route.ts", "utf8");
@@ -313,3 +313,4 @@ test("publisher is not treated as admin for user management, reassignment, or tr
   assert.equal(/roles\.includes\("publisher"\)[\s\S]*admin_create_item/.test(createItemRoute), false);
   assert.match(creationMigration, /if not public\.is_admin\(\) then/);
 });
+
