@@ -80,6 +80,7 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
   const [form, setForm] = useState<FormState>(emptyForm);
   const [trackForm, setTrackForm] = useState<TrackState>(emptyTrack);
   const [showTrackForm, setShowTrackForm] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [savingItem, setSavingItem] = useState(false);
   const [savingTrack, setSavingTrack] = useState(false);
@@ -129,6 +130,7 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
     setForm(emptyForm);
     setTrackForm(emptyTrack);
     setShowTrackForm(false);
+    setShowDetails(false);
     setMessage(null);
   }
 
@@ -179,7 +181,7 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
         production_file_url: optionalString(form.production_file_url),
         partner_ids: form.partner_ids.map(Number),
         new_partner_name: optionalString(form.new_partner_name),
-        writer_id: form.writer_id,
+        writer_id: optionalString(form.writer_id),
         producer_id: optionalString(form.producer_id),
         reviewer_id: optionalString(form.reviewer_id),
         slot_id: optionalString(form.slot_id),
@@ -207,7 +209,7 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
 
   if (!open) return null;
 
-  const canSubmit = Boolean(form.title.trim() && form.writer_id && !savingItem);
+  const canSubmit = Boolean(form.title.trim() && !savingItem);
 
   return (
     <div className="veil" onClick={handleClose}>
@@ -234,13 +236,13 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
           <label className="field">العنوان<input className="input" required value={form.title} onChange={(event) => patchForm({ title: event.target.value })} /></label>
           <div className="form-grid">
             <label className="field">المسار<select className="input" value={form.track_id} onChange={(event) => patchForm({ track_id: event.target.value })}><option value="">—</option>{tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label>
-            <div className="field">
+            {showDetails ? <div className="field">
               <span>مسار جديد</span>
               <button className="button button-secondary" type="button" onClick={() => setShowTrackForm((current) => !current)}>إضافة مسار جديد</button>
-            </div>
+            </div> : null}
           </div>
 
-          {showTrackForm ? (
+          {showDetails && showTrackForm ? (
             <fieldset className="drawer-partners stack">
               <legend>إضافة مسار جديد</legend>
               <div className="form-grid">
@@ -253,20 +255,26 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
           ) : null}
 
           <label className="field">نوع الفكرة<select className="input" value={form.idea_type_id} onChange={(event) => patchForm({ idea_type_id: event.target.value })}><option value="">—</option>{ideaTypes.map((ideaType) => <option key={ideaType.id} value={ideaType.id}>{ideaType.name}</option>)}</select></label>
-          <label className="field">الكابشن<textarea className="input textarea" value={form.caption} onChange={(event) => patchForm({ caption: event.target.value })} /></label>
+          <label className="field">مسؤول الإعداد <span className="muted">(اختياري في المسودة)</span><select className="input" value={form.writer_id} onChange={(event) => patchForm({ writer_id: event.target.value })}><option value="">—</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
           <label className="field">الملاحظات<textarea className="input textarea" value={form.notes} onChange={(event) => patchForm({ notes: event.target.value })} /></label>
-          <div className="form-grid">
-            <label className="field">رابط تسليم الكاتب<input className="input" inputMode="url" value={form.writer_delivery_url} onChange={(event) => patchForm({ writer_delivery_url: event.target.value })} placeholder="https://..." /></label>
-            <label className="field">رابط ملف الإنتاج<input className="input" inputMode="url" value={form.production_file_url} onChange={(event) => patchForm({ production_file_url: event.target.value })} placeholder="https://..." /></label>
-          </div>
+          <label className="field">موعد نشر مبدئي<select className="input" value={form.slot_id} onChange={(event) => patchForm({ slot_id: event.target.value })}><option value="">—</option>{availableSlots.map((slot) => <option key={slot.slot_id} value={slot.slot_id}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
 
-          <div className="form-grid">
-            <label className="field">الكاتب المسؤول<select className="input" required value={form.writer_id} onChange={(event) => patchForm({ writer_id: event.target.value })}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
-            <label className="field">المنتج المسؤول<select className="input" value={form.producer_id} onChange={(event) => patchForm({ producer_id: event.target.value })}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
-          </div>
-          <label className="field">المراجع المسؤول<select className="input" value={form.reviewer_id} onChange={(event) => patchForm({ reviewer_id: event.target.value })}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+          <button className="details-toggle" type="button" aria-expanded={showDetails} onClick={() => setShowDetails((current) => !current)}>
+            {showDetails ? "إخفاء التفاصيل الإضافية" : "إضافة تفاصيل الآن"}
+          </button>
 
-          <fieldset className="drawer-partners">
+          {showDetails ? <div className="advanced-create-fields stack">
+            <label className="field">الكابشن<textarea className="input textarea" value={form.caption} onChange={(event) => patchForm({ caption: event.target.value })} /></label>
+            <div className="form-grid">
+              <label className="field">رابط تسليم الكاتب<input className="input" inputMode="url" value={form.writer_delivery_url} onChange={(event) => patchForm({ writer_delivery_url: event.target.value })} placeholder="https://..." /></label>
+              <label className="field">رابط ملف الإنتاج<input className="input" inputMode="url" value={form.production_file_url} onChange={(event) => patchForm({ production_file_url: event.target.value })} placeholder="https://..." /></label>
+            </div>
+            <div className="form-grid">
+              <label className="field">مسؤول الإنتاج<select className="input" value={form.producer_id} onChange={(event) => patchForm({ producer_id: event.target.value })}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+              <label className="field">المراجع المسؤول<select className="input" value={form.reviewer_id} onChange={(event) => patchForm({ reviewer_id: event.target.value })}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+            </div>
+
+            <fieldset className="drawer-partners">
             <legend>الشركاء</legend>
             <div className="drawer-partner-checks">
               {partners.map((partner) => (
@@ -283,12 +291,11 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
             <div className="drawer-new-partner stack">
               <label className="field">شريك جديد<input className="input" value={form.new_partner_name} onChange={(event) => patchForm({ new_partner_name: event.target.value })} /></label>
             </div>
-          </fieldset>
-
-          <label className="field">موعد النشر<select className="input" value={form.slot_id} onChange={(event) => patchForm({ slot_id: event.target.value })}><option value="">—</option>{availableSlots.map((slot) => <option key={slot.slot_id} value={slot.slot_id}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
+            </fieldset>
+          </div> : null}
 
           <div className="actions-row">
-            <button className="button" type="submit" disabled={!canSubmit}>إنشاء المادة</button>
+            <button className="button" type="submit" disabled={!canSubmit}>{savingItem ? "جارٍ الحفظ..." : "حفظ كمسودة"}</button>
             <button className="button button-secondary" type="button" disabled={savingItem || savingTrack} onClick={handleClose}>إلغاء</button>
           </div>
         </form>

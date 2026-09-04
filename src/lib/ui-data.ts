@@ -44,6 +44,7 @@ export type BoardItem = {
   track_color: string | null;
   idea_type: string | null;
   waiting_on: string | null;
+  current_assignees: string[];
 };
 
 export type ReadyItem = {

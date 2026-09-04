@@ -19,7 +19,7 @@ export type AdminCreateItemPayload = {
   production_file_url?: string | null;
   partner_ids?: number[];
   new_partner_name?: string | null;
-  writer_id: string;
+  writer_id?: string | null;
   producer_id?: string | null;
   reviewer_id?: string | null;
   slot_id?: string | null;
@@ -99,7 +99,7 @@ export function validateAdminCreateItemPayload(input: unknown): ValidationResult
   if (!title) return { ok: false, code: "E_TITLE", message: "العنوان مطلوب." };
 
   const writerId = optionalUuid(body.writer_id);
-  if (!writerId) return { ok: false, code: "E_WRITER", message: "اختر الكاتب المسؤول." };
+  if (writerId === undefined) return { ok: false, code: "E_WRITER", message: "الكاتب المختار غير صحيح." };
 
   const producerId = optionalUuid(body.producer_id);
   if (producerId === undefined) return { ok: false, code: "E_PRODUCER", message: "المنتج المختار غير صحيح." };

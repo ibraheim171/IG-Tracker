@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
-import { AdminStageControl, type AdminStageCurrentSlot } from "@/components/admin-stage-control";
 import { useReferenceData } from "@/components/reference-data-provider";
 import { canEditItemAssignments, type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
@@ -9,10 +8,11 @@ import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/lib/database.types";
 import type { DrawerPreview, IdeaTypeOption, ItemStatus, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
 import { extractMessage, formatHebronDateTime, formatNumber, formatPercent, isAdminRole, parseRuleMessage, statusLabels } from "@/lib/ui-data";
+import { contentStateLabel, currentOwnerParts, isWorkflowStepComplete, isWorkflowStepCurrent, productionStateLabel, workflowLabel, workflowSteps } from "@/lib/workflow-ui";
 
 type ItemRow = Tables<"items">;
 type PerformanceRow = Tables<"v_item_performance">;
-type CurrentSlot = AdminStageCurrentSlot;
+type CurrentSlot = Pick<Tables<"publishing_slots">, "id" | "slot_at" | "state">;
 
 type ParticipantRecord = {
   user_id: string;
@@ -25,7 +25,9 @@ type PartnerRecord = {
   partners: { name: string } | { name: string }[] | null;
 };
 
-type ApprovalRecord = Pick<Tables<"approvals">, "gate" | "result">;
+type ActorProfile = { display_name: string } | { display_name: string }[] | null;
+type ApprovalRecord = Pick<Tables<"approvals">, "id" | "gate" | "result" | "note" | "created_at" | "actor_id"> & { profiles: ActorProfile };
+type TransitionRecord = Pick<Tables<"transitions">, "id" | "from_status" | "to_status" | "note" | "override_reason" | "is_override" | "created_at" | "actor_id"> & { profiles: ActorProfile };
 type OpenSlot = Pick<Tables<"v_slot_board">, "slot_id" | "slot_at" | "state" | "n_items">;
 
 type DrawerDetails = {
@@ -33,6 +35,7 @@ type DrawerDetails = {
   participants: ParticipantRecord[];
   partners: PartnerRecord[];
   approvals: ApprovalRecord[];
+  transitions: TransitionRecord[];
   performance: PerformanceRow | null;
   openSlots: OpenSlot[];
   currentSlot: CurrentSlot | null;
@@ -83,15 +86,6 @@ type Props = {
   largeCaption?: boolean;
 };
 
-const pipeline: { key: ItemStatus; label: string }[] = [
-  { key: "idea", label: "الكتابة" },
-  { key: "writing", label: "اعتماد المحتوى" },
-  { key: "content_approved", label: "الإنتاج" },
-  { key: "in_production", label: "اعتماد التصميم" },
-  { key: "published", label: "النشر" },
-];
-
-const order: ItemStatus[] = ["idea", "writing", "content_approved", "in_production", "design_approved", "ready", "published"];
 const detailTimeoutMs = 10000;
 const autoSaveDelayMs = 1800;
 const itemFieldKeys: EditableItemField[] = ["title", "track_id", "idea_type_id", "caption", "notes", "writer_delivery_url", "production_file_url"];
@@ -109,6 +103,11 @@ function profileName(value: ParticipantRecord["profiles"]) {
 function partnerName(value: PartnerRecord["partners"]) {
   if (Array.isArray(value)) return value[0]?.name ?? "—";
   return value?.name ?? "—";
+}
+
+function actorName(value: ActorProfile) {
+  if (Array.isArray(value)) return value[0]?.display_name ?? "مستخدم";
+  return value?.display_name ?? "مستخدم";
 }
 
 function trackStyle(color: string | null | undefined) {
@@ -228,6 +227,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const [overrideReason, setOverrideReason] = useState("");
   const [failedAdvance, setFailedAdvance] = useState<ItemStatus | null>(null);
   const [rejectNote, setRejectNote] = useState("");
+  const [publishPermalink, setPublishPermalink] = useState("");
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [trackSaving, setTrackSaving] = useState(false);
@@ -261,6 +261,14 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const producers = useMemo(() => membersByRole(teamMembers, "producer"), [teamMembers]);
   const reviewers = useMemo(() => membersByRole(teamMembers, "reviewer"), [teamMembers]);
   const memberById = useMemo(() => new Map(teamMembers.map((member) => [member.id, member])), [teamMembers]);
+  const ownerParts = currentOwnerParts(displayItem?.status ?? "idea");
+  const currentAssignees = details?.participants
+    .filter((row) => ownerParts.includes(row.part))
+    .map((row) => profileName(row.profiles))
+    .filter((name) => name !== "—") ?? [];
+  const currentOwnerLabel = currentAssignees.length
+    ? currentAssignees.join("، ")
+    : displayItem && ["design_approved", "ready", "published"].includes(displayItem.status) ? "مسؤول النشر" : "غير معيّن";
 
   useEffect(() => {
     latestItemRef.current = item;
@@ -321,6 +329,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         setLoadState("idle");
         setLoadError(null);
         setMessage(null);
+        setPublishPermalink("");
         return;
       }
 
@@ -343,6 +352,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setFailedAdvance(null);
       setOverrideReason("");
       setRejectNote("");
+      setPublishPermalink("");
 
       const timeoutId = window.setTimeout(() => {
         didTimeout = true;
@@ -759,6 +769,23 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     await reloadAndNotify();
   }
 
+  async function markPublished() {
+    if (!item || !publishPermalink.trim()) return;
+    const { error } = await supabase.rpc("mark_published", {
+      p_item: item.id,
+      p_permalink: publishPermalink.trim(),
+      p_at: undefined,
+      p_override_reason: undefined,
+    });
+    if (error) {
+      setMessage(parseRuleMessage(extractMessage(error)));
+      return;
+    }
+    setPublishPermalink("");
+    setMessage("تم تسجيل النشر.");
+    await refetchDrawerAndList();
+  }
+
   function canEditField(field: EditableItemField) {
     return saveFieldKeys.includes(field);
   }
@@ -806,9 +833,14 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               <span className="num ref-pill">{displayItem.ref}</span>
               <h2>{displayItem.title}</h2>
               <div className="pill-row">
+                <span className="pill status-pill">{workflowLabel(displayItem.status)}</span>
                 {trackName ? <span className="pill track-pill" style={trackStyle(trackColor)}>{trackName}</span> : null}
                 {ideaTypeName ? <span className="pill">{ideaTypeName}</span> : null}
                 {item?.is_archived ? <span className="pill">مؤرشفة</span> : null}
+              </div>
+              <div className="workflow-meta">
+                <span><b>المسؤول الآن:</b> {currentOwnerLabel}</span>
+                <span><b>موعد النشر:</b> {drawerDetails?.currentSlot ? formatHebronDateTime(drawerDetails.currentSlot.slot_at) : "غير محدد"}</span>
               </div>
             </header>
 
@@ -824,8 +856,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
             ) : null}
 
             {item && canEditAssignments ? (
-              <section className="drawer-section stack">
-                <h3>تعيينات الفريق</h3>
+              <details className="drawer-section accordion">
+                <summary>تعيينات الفريق</summary>
+                <div className="accordion-body stack">
                 <p className="muted">هذا القسم للأدمن فقط؛ الحفظ يراجع أدوار الحسابات النشطة داخل قاعدة البيانات.</p>
                 <div className="form-grid">
                   <label className="field">الكاتب المسؤول<select className="input" required value={assignments.writer_id} onChange={(event) => setAssignments((current) => ({ ...current, writer_id: event.target.value }))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
@@ -833,22 +866,22 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 </div>
                 <label className="field">المراجع المسؤول<select className="input" value={assignments.reviewer_id} onChange={(event) => setAssignments((current) => ({ ...current, reviewer_id: event.target.value }))}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
                 <button className="button button-secondary" type="button" disabled={!assignments.writer_id || actionDisabled} onClick={() => runAction(saveAssignments)}>حفظ التعيينات</button>
-              </section>
+                </div>
+              </details>
             ) : null}
 
-            <section className="steps">
-              {pipeline.map((step) => {
-                const currentIndex = order.indexOf(displayItem.status);
-                const stepIndex = order.indexOf(step.key);
-                const isDone = displayItem.status === "published" || currentIndex > stepIndex;
-                const isCurrent = displayItem.status !== "published" && (displayItem.status === step.key || (step.key === "published" && (displayItem.status === "ready" || displayItem.status === "design_approved")));
-                return <span className={`step ${isDone ? "is-done" : ""} ${isCurrent ? "is-current" : ""}`} key={step.key}>{isDone ? "✓ " : ""}{step.label}</span>;
+            <section className="steps" aria-label="تقدم سير العمل">
+              {workflowSteps.map((step) => {
+                const isDone = isWorkflowStepComplete(displayItem.status, step.key);
+                const isCurrent = isWorkflowStepCurrent(displayItem.status, step.key);
+                return <span aria-current={isCurrent ? "step" : undefined} className={`step ${isDone ? "is-done" : ""} ${isCurrent ? "is-current" : ""}`} key={step.key}>{isDone ? "✓ " : ""}{step.label}</span>;
               })}
             </section>
 
             {item && editable && canEdit(item) ? (
-              <section className="drawer-section stack">
-                <h3>الحقول</h3>
+              <details className="drawer-section accordion" open>
+                <summary>تفاصيل الفكرة</summary>
+                <div className="accordion-body stack">
                 <p className="muted">حقول النص للكاتب المعيّن، ورابط الإنتاج للمنتج المعيّن، والشركاء والموعد لمسؤول النشر.</p>
                 {canEditField("title") ? <label className="field">العنوان<input className="input" value={editable.title} onChange={(event) => updateEditable({ title: event.target.value })} /></label> : readOnlyField("العنوان", item.title)}
                 <div className="form-grid">
@@ -898,11 +931,13 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                     </div>
                   </fieldset>
                 ) : null}
-              </section>
+                </div>
+              </details>
             ) : null}
 
-            <section className="drawer-section stack">
-              <h3>الكابشن</h3>
+            <details className="drawer-section accordion" open={displayItem.status === "writing"}>
+              <summary>المحتوى <span className="section-status">{contentStateLabel(displayItem.status)}</span></summary>
+              <div className="accordion-body stack">
               <div className="read-box">{captionText || "—"}</div>
               <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(captionText ?? "")}>نسخ الكابشن</button>
               {item?.notes ? <p>{item.notes}</p> : null}
@@ -912,7 +947,58 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 {item?.ig_permalink ? <a className="button button-secondary" href={item.ig_permalink} target="_blank" rel="noopener noreferrer">فتح المنشور</a> : null}
                 {item?.ig_permalink ? copyButton(item.ig_permalink) : null}
               </div>
-            </section>
+              </div>
+            </details>
+
+            {drawerDetails ? (
+              <details className="drawer-section accordion" open={displayItem.status === "writing" || displayItem.status === "in_production"}>
+                <summary>الاعتمادات <span className="section-status">{drawerDetails.approvals.length.toLocaleString("en-US")}</span></summary>
+                <div className="accordion-body stack">
+                  {drawerDetails.approvals.length ? drawerDetails.approvals.map((approval) => (
+                    <article className="history-entry" key={approval.id}>
+                      <b>{approval.gate === "content" ? "اعتماد المحتوى" : "اعتماد الإنتاج"} · {approval.result === "approve" ? "مقبول" : "مُعاد"}</b>
+                      <span>{actorName(approval.profiles)} · {formatHebronDateTime(approval.created_at)}</span>
+                      {approval.note ? <p>{approval.note}</p> : null}
+                    </article>
+                  )) : <p className="muted">لا توجد قرارات اعتماد بعد.</p>}
+                </div>
+              </details>
+            ) : null}
+
+            <details className="drawer-section accordion" open={displayItem.status === "content_approved" || displayItem.status === "in_production"}>
+              <summary>الإنتاج <span className="section-status">{productionStateLabel(displayItem.status)}</span></summary>
+              <div className="accordion-body stack">
+                <p><b>المنتج:</b> {drawerDetails?.participants.filter((row) => row.part === "producer").map((row) => profileName(row.profiles)).join("، ") || "غير معيّن"}</p>
+                <div className="field"><span>ملف الإنتاج</span>{linkButtons(productionFileUrl, "فتح ملف الإنتاج")}</div>
+              </div>
+            </details>
+
+            <details className="drawer-section accordion" open={displayItem.status === "design_approved" || displayItem.status === "ready" || displayItem.status === "published"}>
+              <summary>النشر</summary>
+              <div className="accordion-body stack">
+                {permissions.canAssignSlot && item?.status !== "published" ? (
+                  <label className="field">موعد النشر<select className="input" value={item?.slot_id ?? ""} disabled={actionDisabled} onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails?.currentSlot ? <option value={drawerDetails.currentSlot.id}>{formatHebronDateTime(drawerDetails.currentSlot.slot_at)}</option> : null}{drawerDetails?.openSlots.filter((slot) => slot.slot_id && slot.slot_id !== item?.slot_id).map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
+                ) : <p><b>الموعد:</b> {drawerDetails?.currentSlot ? formatHebronDateTime(drawerDetails.currentSlot.slot_at) : "غير محدد"}</p>}
+                <div><b>الشركاء:</b> {drawerDetails?.partners.length ? drawerDetails.partners.map((row) => partnerName(row.partners)).join("، ") : "—"}</div>
+                {item?.ig_permalink ? <div className="actions-row"><a className="button button-secondary" href={item.ig_permalink} target="_blank" rel="noopener noreferrer">فتح المنشور</a>{copyButton(item.ig_permalink)}</div> : null}
+              </div>
+            </details>
+
+            {drawerDetails ? (
+              <details className="drawer-section accordion">
+                <summary>السجل <span className="section-status">{drawerDetails.transitions.length.toLocaleString("en-US")}</span></summary>
+                <div className="accordion-body history-list">
+                  {drawerDetails.transitions.length ? drawerDetails.transitions.map((transition) => (
+                    <article className="history-entry" key={transition.id}>
+                      <b>{transition.from_status ? workflowLabel(transition.from_status) : "إنشاء"} ← {workflowLabel(transition.to_status)}</b>
+                      <span>{actorName(transition.profiles)} · {formatHebronDateTime(transition.created_at)}</span>
+                      {transition.note ? <p>{transition.note}</p> : null}
+                      {transition.is_override ? <p className="override-note">تجاوز إداري: {transition.override_reason || "—"}</p> : null}
+                    </article>
+                  )) : <p className="muted">لا توجد انتقالات مسجلة بعد.</p>}
+                </div>
+              </details>
+            ) : null}
 
             {item?.status === "published" && performanceData ? (
               <section className="drawer-section stack">
@@ -930,27 +1016,24 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
             {item && editable && !item.is_archived ? (
               <section className="drawer-section stack">
                 <h3>الإجراءات</h3>
-                {item.status === "idea" && permissions.canSubmitWriting ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(async () => { if (await requestConfirmation({ message: "متأكد أنك جاهز للتسليم؟", confirmLabel: "تسليم", cancelLabel: "إلغاء" })) await advance("writing"); })}>تسليم</button> : null}
+                {item.status === "idea" && permissions.canSubmitWriting ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(async () => { if (await requestConfirmation({ message: "متأكد أنك جاهز لإرسال المسودة لاعتماد المحتوى؟", confirmLabel: "إرسال", cancelLabel: "إلغاء" })) await advance("writing"); })}>إرسال لاعتماد المحتوى</button> : null}
                 {item.status === "writing" && permissions.canReview ? (
                   <>
-                    <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("content_approved"))}>اعتماد</button>
+                    <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("content_approved"))}>اعتماد المحتوى</button>
                     <label className="field">ملاحظة الإعادة<textarea className="input textarea" placeholder="هذه الملاحظة هي ما سيراه الكاتب." value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} /></label>
-                    <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || actionDisabled} onClick={() => runAction(() => reject("content"))}>إعادة بملاحظة</button>
+                    <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || actionDisabled} onClick={() => runAction(() => reject("content"))}>إعادة للكاتب مع السبب</button>
                   </>
                 ) : item.status === "writing" ? <p className="muted">بانتظار مراجع.</p> : null}
-                {item.status === "content_approved" && permissions.canStartProduction ? hasProducer ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("in_production"))}>ابدأ الإنتاج</button> : <p className="muted">بانتظار تعيين منتج.</p> : null}
+                {item.status === "content_approved" && permissions.canStartProduction ? hasProducer ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("in_production"))}>تسليم للإنتاج</button> : <p className="muted">بانتظار تعيين منتج.</p> : null}
                 {item.status === "in_production" && permissions.canReview ? (
                   <>
-                    <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("design_approved"))}>اعتماد التصميم</button>
+                    <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("design_approved"))}>اعتماد الإنتاج</button>
                     <label className="field">ملاحظة الإعادة<textarea className="input textarea" placeholder="هذه الملاحظة هي ما سيراه المنتج." value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} /></label>
                     <button className="button button-secondary" type="button" disabled={!rejectNote.trim() || actionDisabled} onClick={() => runAction(() => reject("design"))}>إعادة بملاحظة</button>
                   </>
                 ) : item.status === "in_production" ? <p className="muted">{isProducer ? "بانتظار مراجع." : "بانتظار الإنتاج والمراجعة."}</p> : null}
-                {item.status === "design_approved" && permissions.canMoveReady ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("ready"))}>انتقل إلى جاهز للنشر</button> : null}
-                {item.status === "ready" ? <p className="muted">تظهر هذه المادة في شاشة جاهز للنشر.</p> : null}
-                {permissions.canAssignSlot && item.status !== "published" ? (
-                  <label className="field">موعد النشر<select className="input" value={item.slot_id ?? ""} disabled={actionDisabled} onChange={(event) => event.target.value && runAction(() => assignSlot(event.target.value))}><option value="">اختر موعدًا</option>{drawerDetails?.currentSlot ? <option value={drawerDetails.currentSlot.id}>{formatHebronDateTime(drawerDetails.currentSlot.slot_at)}</option> : null}{drawerDetails?.openSlots.filter((slot) => slot.slot_id && slot.slot_id !== item.slot_id).map((slot) => <option key={slot.slot_id ?? ""} value={slot.slot_id ?? ""}>{formatHebronDateTime(slot.slot_at)} · {(slot.n_items ?? 0).toLocaleString("en-US")}</option>)}</select></label>
-                ) : null}
+                {item.status === "design_approved" && permissions.canMoveReady ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("ready"))}>جاهزة للنشر</button> : null}
+                {item.status === "ready" && permissions.canMarkPublished ? <><label className="field">رابط منشور إنستغرام<input className="input" inputMode="url" placeholder="https://www.instagram.com/p/..." value={publishPermalink} onChange={(event) => setPublishPermalink(event.target.value)} /></label><button className="button" type="button" disabled={!safeHttpsHref(publishPermalink) || actionDisabled} onClick={() => runAction(markPublished)}>تم النشر</button></> : item.status === "ready" ? <p className="muted">بانتظار مسؤول النشر.</p> : null}
                 {isAdmin && failedAdvance ? (
                   <div className="override-box">
                     <p className="eyebrow">تجاوز إداري</p>
@@ -961,8 +1044,6 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 ) : null}
               </section>
             ) : null}
-
-            {item ? <AdminStageControl item={item} currentSlot={drawerDetails?.currentSlot ?? null} roles={roles} onChanged={refetchDrawerAndList} /> : null}
 
             <p className="muted">الحالة الحالية: {statusLabels[displayItem.status]}</p>
           </div>

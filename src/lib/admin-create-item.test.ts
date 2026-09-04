@@ -6,6 +6,7 @@ import { buildMyMaterials, type ParticipantItemRow } from "./my-materials-data.t
 
 const creationMigration = readFileSync("supabase/migrations/20260903053534_admin_create_items_tracks.sql", "utf8");
 const roleMigration = readFileSync("supabase/migrations/20260902131635_role_field_permissions.sql", "utf8");
+const draftWorkflowMigration = readFileSync("supabase/migrations/20260904131500_draft_workflow_ux.sql", "utf8");
 const createItemRoute = readFileSync("src/app/api/admin/items/route.ts", "utf8");
 const createTrackRoute = readFileSync("src/app/api/admin/tracks/route.ts", "utf8");
 const assignmentsRoute = readFileSync("src/app/api/admin/items/[itemId]/participants/route.ts", "utf8");
@@ -13,6 +14,7 @@ const slotsBoard = readFileSync("src/components/slots-board.tsx", "utf8");
 const createModal = readFileSync("src/components/admin-create-item-modal.tsx", "utf8");
 const itemDrawer = readFileSync("src/components/item-drawer.tsx", "utf8");
 const globalsCss = readFileSync("src/app/globals.css", "utf8");
+const rootLayout = readFileSync("src/app/layout.tsx", "utf8");
 
 const uuidA = "11111111-1111-4111-8111-111111111111";
 const uuidB = "22222222-2222-4222-8222-222222222222";
@@ -43,6 +45,39 @@ test("admin create item validator allows safe payload and rejects forbidden or u
 
   assert.equal(validateAdminCreateItemPayload({ title: "عنوان", writer_id: uuidA, status: "published" }).ok, false);
   assert.equal(validateAdminCreateItemPayload({ title: "عنوان", writer_id: uuidA, partner_ids: [1, "bad"] }).ok, false);
+});
+
+test("minimal idea draft needs only a title and delays operational assignments", () => {
+  const minimal = validateAdminCreateItemPayload({ title: "فكرة أولية" });
+  assert.equal(minimal.ok, true);
+  if (minimal.ok) {
+    assert.equal(minimal.value.title, "فكرة أولية");
+    assert.equal(minimal.value.writer_id, null);
+    assert.equal(minimal.value.producer_id, null);
+    assert.equal(minimal.value.reviewer_id, null);
+  }
+  assert.equal(validateAdminCreateItemPayload({ title: "فكرة", writer_id: "not-a-uuid" }).ok, false);
+  assert.match(createModal, /إضافة تفاصيل الآن/);
+  assert.match(createModal, /حفظ كمسودة/);
+  assert.match(createModal, /showDetails/);
+});
+
+test("draft RPC keeps minimal creation atomic and requires a writer at the writing gate", () => {
+  assert.match(draftWorkflowMigration, /rename to admin_create_item_with_writer/);
+  assert.match(draftWorkflowMigration, /it := public\.create_item\(creation_fields\)/);
+  assert.match(draftWorkflowMigration, /return public\.admin_create_item_with_writer\(p_fields\)/);
+  assert.match(draftWorkflowMigration, /if p_to = 'writing' then[\s\S]*participant\.part = 'writer'[\s\S]*عيّن مسؤول الإعداد/);
+  assert.match(draftWorkflowMigration, /revoke execute on function public\.item_violations/);
+  assert.equal(/exception\s+when\s+others/i.test(draftWorkflowMigration), false);
+});
+
+test("workflow drawer is RTL, accordion-based, and exposes only stage-specific actions", () => {
+  assert.match(rootLayout, /<html lang="ar" dir="rtl"/);
+  for (const label of ["تفاصيل الفكرة", "المحتوى", "الاعتمادات", "الإنتاج", "النشر", "السجل"]) assert.match(itemDrawer, new RegExp(label));
+  for (const action of ["إرسال لاعتماد المحتوى", "اعتماد المحتوى", "إعادة للكاتب مع السبب", "تسليم للإنتاج", "اعتماد الإنتاج", "جاهزة للنشر", "تم النشر"]) assert.match(itemDrawer, new RegExp(action));
+  assert.doesNotMatch(itemDrawer, /AdminStageControl/);
+  assert.match(itemDrawer, /rpc\("mark_published"/);
+  assert.match(globalsCss, /\.accordion > summary[\s\S]*min-block-size:\s*52px/);
 });
 
 test("track validator accepts unique-looking valid input and rejects duplicate-class bad input shapes", () => {

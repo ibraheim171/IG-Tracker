@@ -9,7 +9,8 @@
     "test:admin-users": "node --test src/lib/admin-users-core.test.ts",
     "test:item-permissions": "node --test src/lib/item-permissions.test.ts",
     "test:admin-reassign-tasks": "node --test src/lib/admin-reassign-tasks.test.ts",
-    "test:admin-create-item": "node --test src/lib/admin-create-item.test.ts"
+    "test:admin-create-item": "node --test src/lib/admin-create-item.test.ts",
+    "test:workflow-ui": "node --test src/lib/workflow-ui.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

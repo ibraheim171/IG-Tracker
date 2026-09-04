@@ -8,6 +8,7 @@ import { useReferenceData } from "@/components/reference-data-provider";
 import type { TeamMemberOption } from "@/lib/admin-create-item";
 import type { BoardItem, BoardSlot, RoleName } from "@/lib/ui-data";
 import { arabicDayName, formatHebronDateTime, isAdminRole, relativeDayLabel } from "@/lib/ui-data";
+import { workflowLabel } from "@/lib/workflow-ui";
 
 type Props = {
   slots: BoardSlot[];
@@ -94,8 +95,10 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
                           {slotItems.map((item) => (
                             <button className="item-row" type="button" key={item.id} style={trackStyle(item.track_color)} onClick={() => setOpenItemId(item.id)}>
                               <span className="item-title">{item.title}</span>
-                              <span className="muted">{item.idea_type ?? "—"}</span>
-                              {item.waiting_on ? <span className="pill">{item.waiting_on}</span> : null}
+                              <span className="item-card-meta"><b>المسار</b> {item.track_name ?? "—"}</span>
+                              <span className="item-card-meta"><b>المسؤول الحالي</b> {item.current_assignees.length ? item.current_assignees.join("، ") : item.status === "design_approved" || item.status === "ready" ? "مسؤول النشر" : "—"}</span>
+                              <span className="pill">{workflowLabel(item.status)}</span>
+                              {item.waiting_on ? <span className="item-warning">متوقفة: {item.waiting_on}</span> : null}
                             </button>
                           ))}
                         </div>
