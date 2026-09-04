@@ -62,10 +62,48 @@ test("minimal idea draft needs only a title and delays operational assignments",
   assert.match(createModal, /showDetails/);
 });
 
-test("draft RPC keeps minimal creation atomic and requires a writer at the writing gate", () => {
+test("draft RPC uses an explicit allowlist and rejects workflow or ownership fields", () => {
   assert.match(draftWorkflowMigration, /rename to admin_create_item_with_writer/);
-  assert.match(draftWorkflowMigration, /it := public\.create_item\(creation_fields\)/);
-  assert.match(draftWorkflowMigration, /return public\.admin_create_item_with_writer\(p_fields\)/);
+
+  const wrapper = draftWorkflowMigration.match(
+    /create function public\.admin_create_item\([\s\S]*?create or replace function public\.item_violations/,
+  )?.[0] ?? "";
+  const allowlist = wrapper.match(/allowed_draft_fields text\[\] := array\[([\s\S]*?)\];/)?.[1] ?? "";
+  const allowedFields = [...allowlist.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+
+  assert.deepEqual(allowedFields, [
+    "title",
+    "track_id",
+    "idea_type_id",
+    "caption",
+    "notes",
+    "writer_delivery_url",
+    "production_file_url",
+    "partner_ids",
+    "new_partner_name",
+    "slot_id",
+  ]);
+  assert.match(wrapper, /where not \(candidate = any\(allowed_draft_fields\)\)/);
+  assert.match(wrapper, /INVALID_PAYLOAD: حقل غير مسموح عند إنشاء المسودة/);
+  assert.doesNotMatch(wrapper, /creation_fields := p_fields\s*-/);
+  assert.doesNotMatch(wrapper, /create_item_with_writer\(p_fields\)/);
+  assert.match(wrapper, /creation_fields := jsonb_build_object\('title'/);
+  assert.match(wrapper, /it := public\.create_item\(creation_fields\)/);
+  assert.match(wrapper, /jsonb_typeof\(p_fields -> 'title'\) is distinct from 'string'/);
+  assert.match(wrapper, /jsonb_array_elements\(p_fields -> 'partner_ids'\)/);
+
+  for (const rejectedField of [
+    "status",
+    "published_at",
+    "ig_permalink",
+    "writer_id",
+    "producer_id",
+    "reviewer_id",
+    "unexpected_field",
+  ]) {
+    assert.equal(allowedFields.includes(rejectedField), false, `${rejectedField} must fail instead of being dropped`);
+  }
+
   assert.match(draftWorkflowMigration, /if p_to = 'writing' then[\s\S]*participant\.part = 'writer'[\s\S]*عيّن مسؤول الإعداد/);
   assert.match(draftWorkflowMigration, /revoke execute on function public\.item_violations/);
   assert.equal(/exception\s+when\s+others/i.test(draftWorkflowMigration), false);

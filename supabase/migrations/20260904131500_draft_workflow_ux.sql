@@ -19,6 +19,21 @@ declare
   creation_fields jsonb;
   partner_ids smallint[] := '{}';
   slot_id uuid;
+  requested text[];
+  forbidden text[];
+  allowed_draft_fields text[] := array[
+    'title',
+    'track_id',
+    'idea_type_id',
+    'caption',
+    'notes',
+    'writer_delivery_url',
+    'production_file_url',
+    'partner_ids',
+    'new_partner_name',
+    'slot_id'
+  ];
+  field text;
 begin
   perform public.assert_can_use_app();
 
@@ -30,24 +45,100 @@ begin
     raise exception 'INVALID_PAYLOAD: أرسل حقولاً صحيحة للإنشاء';
   end if;
 
-  if nullif(btrim(coalesce(p_fields ->> 'writer_id', '')), '') is not null then
-    return public.admin_create_item_with_writer(p_fields);
+  select coalesce(array_agg(key order by key), '{}')
+    into requested
+    from jsonb_object_keys(p_fields) as keys(key);
+
+  select coalesce(array_agg(candidate order by candidate), '{}')
+    into forbidden
+    from unnest(requested) as candidates(candidate)
+   where not (candidate = any(allowed_draft_fields));
+
+  if array_length(forbidden, 1) is not null then
+    raise exception 'INVALID_PAYLOAD: حقل غير مسموح عند إنشاء المسودة';
   end if;
 
-  if nullif(btrim(coalesce(p_fields ->> 'producer_id', '')), '') is not null
-     or nullif(btrim(coalesce(p_fields ->> 'reviewer_id', '')), '') is not null then
-    raise exception 'WRITER_REQUIRED: عيّن مسؤول الإعداد قبل تعيين بقية الفريق';
+  if jsonb_typeof(p_fields -> 'title') is distinct from 'string'
+     or coalesce(btrim(p_fields ->> 'title'), '') = '' then
+    raise exception 'INVALID_PAYLOAD: العنوان مطلوب';
   end if;
 
-  creation_fields := p_fields - array[
-    'writer_id',
-    'producer_id',
-    'reviewer_id',
-    'production_file_url',
-    'partner_ids',
-    'new_partner_name',
-    'slot_id'
-  ]::text[];
+  foreach field in array array['track_id', 'idea_type_id'] loop
+    if p_fields ? field and jsonb_typeof(p_fields -> field) not in ('number', 'null') then
+      raise exception 'INVALID_PAYLOAD: الحقول المرجعية يجب أن تكون أرقاماً صحيحة';
+    end if;
+    if p_fields ? field and jsonb_typeof(p_fields -> field) = 'number'
+       and ((p_fields ->> field) !~ '^[0-9]+$' or (p_fields ->> field)::numeric > 32767) then
+      raise exception 'INVALID_PAYLOAD: الحقول المرجعية يجب أن تكون أرقاماً صحيحة';
+    end if;
+  end loop;
+
+  foreach field in array array['caption', 'notes', 'writer_delivery_url', 'production_file_url', 'new_partner_name'] loop
+    if p_fields ? field and jsonb_typeof(p_fields -> field) not in ('string', 'null') then
+      raise exception 'INVALID_PAYLOAD: الحقول النصية يجب أن تكون نصوصاً';
+    end if;
+  end loop;
+
+  if p_fields ? 'writer_delivery_url'
+     and jsonb_typeof(p_fields -> 'writer_delivery_url') = 'string'
+     and coalesce(btrim(p_fields ->> 'writer_delivery_url'), '') <> ''
+     and not public.is_safe_https_url(p_fields ->> 'writer_delivery_url') then
+    raise exception 'INVALID_LINK: رابط تسليم الكاتب يجب أن يكون HTTPS صالحاً';
+  end if;
+
+  if p_fields ? 'production_file_url'
+     and jsonb_typeof(p_fields -> 'production_file_url') = 'string'
+     and coalesce(btrim(p_fields ->> 'production_file_url'), '') <> ''
+     and not public.is_safe_https_url(p_fields ->> 'production_file_url') then
+    raise exception 'INVALID_LINK: رابط ملف الإنتاج يجب أن يكون HTTPS صالحاً';
+  end if;
+
+  if p_fields ? 'slot_id' and jsonb_typeof(p_fields -> 'slot_id') not in ('string', 'null') then
+    raise exception 'INVALID_SLOT: موعد النشر غير صحيح';
+  end if;
+
+  if p_fields ? 'slot_id'
+     and jsonb_typeof(p_fields -> 'slot_id') = 'string'
+     and nullif(btrim(p_fields ->> 'slot_id'), '') is not null
+     and (p_fields ->> 'slot_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+    raise exception 'INVALID_SLOT: موعد النشر غير صحيح';
+  end if;
+
+  if p_fields ? 'partner_ids' and jsonb_typeof(p_fields -> 'partner_ids') <> 'array' then
+    raise exception 'INVALID_PAYLOAD: الشركاء يجب أن يكونوا قائمة';
+  end if;
+
+  if p_fields ? 'partner_ids' and exists (
+    select 1
+      from jsonb_array_elements(p_fields -> 'partner_ids') as elements(value)
+     where jsonb_typeof(value) <> 'number'
+  ) then
+    raise exception 'INVALID_PAYLOAD: الشركاء يجب أن يكونوا أرقاماً صحيحة';
+  end if;
+
+  if p_fields ? 'partner_ids' and exists (
+    select 1
+      from jsonb_array_elements_text(p_fields -> 'partner_ids') as elements(value)
+     where value !~ '^[0-9]+$' or value::numeric > 32767
+  ) then
+    raise exception 'INVALID_PAYLOAD: الشركاء يجب أن يكونوا أرقاماً صحيحة';
+  end if;
+
+  creation_fields := jsonb_build_object('title', btrim(p_fields ->> 'title'));
+
+  if p_fields ? 'track_id' and jsonb_typeof(p_fields -> 'track_id') = 'number' then
+    creation_fields := creation_fields || jsonb_build_object('track_id', (p_fields ->> 'track_id')::smallint);
+  end if;
+
+  if p_fields ? 'idea_type_id' and jsonb_typeof(p_fields -> 'idea_type_id') = 'number' then
+    creation_fields := creation_fields || jsonb_build_object('idea_type_id', (p_fields ->> 'idea_type_id')::smallint);
+  end if;
+
+  foreach field in array array['caption', 'notes', 'writer_delivery_url'] loop
+    if p_fields ? field and jsonb_typeof(p_fields -> field) = 'string' then
+      creation_fields := creation_fields || jsonb_build_object(field, nullif(btrim(p_fields ->> field), ''));
+    end if;
+  end loop;
 
   it := public.create_item(creation_fields);
 
@@ -58,25 +149,14 @@ begin
     );
   end if;
 
-  if nullif(btrim(coalesce(p_fields ->> 'slot_id', '')), '') is not null then
-    if (p_fields ->> 'slot_id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
-      raise exception 'INVALID_SLOT: موعد النشر غير صحيح';
-    end if;
+  if p_fields ? 'slot_id'
+     and jsonb_typeof(p_fields -> 'slot_id') = 'string'
+     and nullif(btrim(p_fields ->> 'slot_id'), '') is not null then
     slot_id := (p_fields ->> 'slot_id')::uuid;
     it := public.assign_slot(it.id, slot_id);
   end if;
 
   if p_fields ? 'partner_ids' then
-    if jsonb_typeof(p_fields -> 'partner_ids') <> 'array' then
-      raise exception 'INVALID_PAYLOAD: الشركاء يجب أن يكونوا قائمة';
-    end if;
-    if exists (
-      select 1
-        from jsonb_array_elements_text(p_fields -> 'partner_ids') as values(value)
-       where value !~ '^[0-9]+$'
-    ) then
-      raise exception 'INVALID_PAYLOAD: الشركاء يجب أن يكونوا أرقاماً صحيحة';
-    end if;
     select coalesce(array_agg(distinct value::smallint order by value::smallint), '{}')
       into partner_ids
       from jsonb_array_elements_text(p_fields -> 'partner_ids') as values(value);
