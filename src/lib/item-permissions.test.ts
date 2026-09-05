@@ -5,6 +5,7 @@ import { getItemPermissions, isSafeHttpsUrl, safeHttpsHref, validateItemFieldPat
 import type { ParticipantPart, RoleName } from "./ui-data.ts";
 
 const migration = readFileSync("supabase/migrations/20260902131635_role_field_permissions.sql", "utf8");
+const restrictedFieldsMigration = readFileSync("supabase/migrations/20260905040223_restrict_writer_item_fields.sql", "utf8");
 const appGuardMigration = readFileSync("supabase/migrations/20260901093257_must_change_password_app_guard.sql", "utf8");
 const fieldsRoute = readFileSync("src/app/api/items/[itemId]/fields/route.ts", "utf8");
 const itemDrawer = readFileSync("src/components/item-drawer.tsx", "utf8");
@@ -32,8 +33,16 @@ function allowedFields(roles: RoleName[], participantParts: ParticipantPart[] = 
 
 test("assigned writer can edit writing fields only", () => {
   const fields = allowedFields(["writer"], ["writer"]);
-  assert.deepEqual([...fields].sort(), ["caption", "idea_type_id", "notes", "title", "track_id", "writer_delivery_url"].sort());
+  assert.deepEqual([...fields].sort(), ["caption", "notes", "writer_delivery_url"].sort());
   assert.equal(fields.has("production_file_url"), false);
+});
+
+test("assigned writer cannot edit title, track, or idea type", () => {
+  for (const fields of [{ title: "عنوان" }, { track_id: 1 }, { idea_type_id: 1 }]) {
+    const result = validateItemFieldPatch(input(["writer"], ["writer"]), fields);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "E_FIELD_FORBIDDEN");
+  }
 });
 
 test("unassigned writer is rejected", () => {
@@ -132,9 +141,27 @@ test("publisher does not get admin user-management or admin stage powers", () =>
 
 test("writer plus producer receives the union of both field permissions", () => {
   const fields = allowedFields(["writer", "producer"], ["writer", "producer"]);
-  assert.equal(fields.has("caption"), true);
-  assert.equal(fields.has("writer_delivery_url"), true);
-  assert.equal(fields.has("production_file_url"), true);
+  assert.deepEqual([...fields].sort(), ["caption", "notes", "production_file_url", "writer_delivery_url"].sort());
+  for (const field of ["title", "track_id", "idea_type_id"] as const) assert.equal(fields.has(field), false);
+
+  const reversed = allowedFields(["producer", "writer"], ["producer", "writer"]);
+  assert.deepEqual([...reversed].sort(), [...fields].sort());
+});
+
+test("admin keeps title, track, and idea type field access", () => {
+  const fields = allowedFields(["admin"]);
+  for (const field of ["title", "track_id", "idea_type_id"] as const) assert.equal(fields.has(field), true);
+});
+
+test("mixed writer payloads reject atomically instead of filtering read-only fields", () => {
+  const captionAndTrack = validateItemFieldPatch(input(["writer"], ["writer"]), { caption: "نص", track_id: 1 });
+  assert.deepEqual(captionAndTrack, { ok: false, code: "E_FIELD_FORBIDDEN", fields: ["track_id"] });
+
+  const deliveryAndTitle = validateItemFieldPatch(input(["writer"], ["writer"]), {
+    writer_delivery_url: "https://example.com/writer",
+    title: "عنوان",
+  });
+  assert.deepEqual(deliveryAndTitle, { ok: false, code: "E_FIELD_FORBIDDEN", fields: ["title"] });
 });
 
 test("publisher plus producer receives the union of publishing and production permissions", () => {
@@ -156,6 +183,39 @@ test("admin plus producer receives admin permissions", () => {
 test("disabled users and password-change users are rejected", () => {
   assert.deepEqual(getItemPermissions(input(["admin"], [], { active: false })).editableFields, []);
   assert.equal(getItemPermissions(input(["publisher"], [], { mustChangePassword: true })).canMarkPublished, false);
+  assert.deepEqual(getItemPermissions(input(["writer"], ["writer"], { active: false })).editableFields, []);
+  assert.deepEqual(getItemPermissions(input(["producer"], ["producer"], { mustChangePassword: true })).editableFields, []);
+});
+
+test("API validation and drawer payload construction use the restricted field matrix", () => {
+  for (const field of ["title", "track_id", "idea_type_id"] as const) {
+    const result = validateItemFieldPatch(input(["writer"], ["writer"]), { [field]: field === "title" ? "عنوان" : 1 });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "E_FIELD_FORBIDDEN");
+  }
+  assert.match(fieldsRoute, /validateItemFieldPatch/);
+  assert.match(itemDrawer, /const saveFieldKeys = drawerEditableFields\(permissions\.editableFields\)/);
+  assert.match(itemDrawer, /const allowedSaveFields = saveFieldsFor\(currentItem\)/);
+  assert.match(itemDrawer, /buildItemPayload\(currentEditable, allowedSaveFields\)/);
+  assert.match(itemDrawer, /canEditField\("title"\)[\s\S]*readOnlyField\("العنوان", item\.title\)/);
+  assert.match(itemDrawer, /canEditField\("track_id"\)[\s\S]*readOnlyField\("المسار", trackName\)/);
+  assert.match(itemDrawer, /canEditField\("idea_type_id"\)[\s\S]*readOnlyField\("نوع الفكرة", ideaTypeName\)/);
+});
+
+test("latest migration narrows the live save_item_fields RPC without weakening database guards", () => {
+  const saveBlock = restrictedFieldsMigration.match(/create or replace function public\.save_item_fields\([\s\S]*?\r?\nend\r?\n\$\$;/)?.[0] ?? "";
+  assert.match(saveBlock, /perform public\.assert_can_use_app\(\)/);
+  assert.match(saveBlock, /if public\.is_admin\(\) then[\s\S]*array\['title', 'track_id', 'idea_type_id', 'caption', 'notes', 'writer_delivery_url', 'production_file_url', 'priority'\]/);
+  assert.match(saveBlock, /is_item_participant_part\(p_item, 'writer'\)[\s\S]*array\['caption', 'notes', 'writer_delivery_url'\]/);
+  assert.match(saveBlock, /is_item_participant_part\(p_item, 'producer'\)[\s\S]*array\['production_file_url'\]/);
+  const writerBlock = saveBlock.match(/if public\.is_item_participant_part\(p_item, 'writer'\)[\s\S]*?end if;/)?.[0] ?? "";
+  assert.doesNotMatch(writerBlock, /title|track_id|idea_type_id|production_file_url/);
+  assert.ok(saveBlock.indexOf("FIELD_FORBIDDEN") < saveBlock.indexOf("update public.items"));
+  assert.ok(saveBlock.indexOf("INVALID_LINK") < saveBlock.indexOf("update public.items"));
+  assert.match(restrictedFieldsMigration, /revoke execute on function public\.save_item_fields\(uuid, jsonb\) from public, anon, authenticated/);
+  assert.match(restrictedFieldsMigration, /grant execute on function public\.save_item_fields\(uuid, jsonb\) to authenticated/);
+  assert.match(restrictedFieldsMigration, /revoke insert, update, delete on table public\.items from public, anon, authenticated/);
+  assert.match(restrictedFieldsMigration, /revoke truncate on table[\s\S]*public\.publishing_slots[\s\S]*from public, anon, authenticated/);
 });
 
 test("database migration enforces trusted RPC and publisher-admin boundaries", () => {
@@ -217,8 +277,8 @@ test("database create item path blocks sensitive insert fields and starts from i
 test("database create and save paths reject unsafe delivery links before mutation", () => {
   assert.match(migration, /create or replace function public\.is_safe_https_url\(p_value text\)/);
   assert.match(migration, /\^https:\/\/\(\[a-z0-9\]/);
-  const saveBlock = migration.match(/create or replace function public\.save_item_fields\([\s\S]*?\nend\n\$\$;/)?.[0] ?? "";
-  const createBlock = migration.match(/create or replace function public\.create_item\([\s\S]*?\nend\n\$\$;/)?.[0] ?? "";
+  const saveBlock = migration.match(/create or replace function public\.save_item_fields\([\s\S]*?\r?\nend\r?\n\$\$;/)?.[0] ?? "";
+  const createBlock = migration.match(/create or replace function public\.create_item\([\s\S]*?\r?\nend\r?\n\$\$;/)?.[0] ?? "";
   assert.match(saveBlock, /p_fields \? 'writer_delivery_url' and not public\.is_safe_https_url/);
   assert.match(saveBlock, /p_fields \? 'production_file_url' and not public\.is_safe_https_url/);
   assert.ok(saveBlock.indexOf("INVALID_LINK") < saveBlock.indexOf("update public.items"));

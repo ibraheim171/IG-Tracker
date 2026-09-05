@@ -45,7 +45,7 @@ export type FieldPatchValidation =
   | { ok: true; fields: Partial<Record<EditableItemField, unknown>> }
   | { ok: false; code: "E_INVALID_PAYLOAD" | "E_FIELD_FORBIDDEN" | "E_INVALID_LINK"; fields?: string[] };
 
-const writerFields: EditableItemField[] = ["title", "track_id", "idea_type_id", "caption", "notes", "writer_delivery_url"];
+const writerFields: EditableItemField[] = ["caption", "notes", "writer_delivery_url"];
 const producerFields: EditableItemField[] = ["production_file_url"];
 const adminFields: EditableItemField[] = [...editableItemFields];
 
