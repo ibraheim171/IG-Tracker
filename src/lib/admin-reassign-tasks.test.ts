@@ -9,7 +9,7 @@ import {
 } from "./admin-reassign-tasks.ts";
 import type { Role } from "./admin-users.ts";
 
-const migrationUrl = new URL("../../supabase/migrations/20260902134858_admin_reassign_tasks.sql", import.meta.url);
+const migrationUrl = new URL("../../supabase/migrations/20260903011747_admin_reassign_tasks.sql", import.meta.url);
 const routeUrl = new URL("../app/api/admin/reassign-tasks/route.ts", import.meta.url);
 const usersManagerUrl = new URL("../app/(protected)/admin/users/users-manager.tsx", import.meta.url);
 

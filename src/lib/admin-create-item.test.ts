@@ -5,7 +5,7 @@ import { buildDraftCreateItemPayload, canEditItemAssignments, validateAdminCreat
 import { buildMyMaterials, type ParticipantItemRow } from "./my-materials-data.ts";
 
 const creationMigration = readFileSync("supabase/migrations/20260903071931_admin_create_items_tracks.sql", "utf8");
-const roleMigration = readFileSync("supabase/migrations/20260902131635_role_field_permissions.sql", "utf8");
+const roleMigration = readFileSync("supabase/migrations/20260903011558_role_field_permissions.sql", "utf8");
 const draftWorkflowMigration = readFileSync("supabase/migrations/20260904214834_draft_workflow_ux.sql", "utf8");
 const createItemRoute = readFileSync("src/app/api/admin/items/route.ts", "utf8");
 const createTrackRoute = readFileSync("src/app/api/admin/tracks/route.ts", "utf8");

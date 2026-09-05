@@ -4,7 +4,7 @@ import test from "node:test";
 import { getItemPermissions, isSafeHttpsUrl, safeHttpsHref, validateItemFieldPatch } from "./item-permissions.ts";
 import type { ParticipantPart, RoleName } from "./ui-data.ts";
 
-const migration = readFileSync("supabase/migrations/20260902131635_role_field_permissions.sql", "utf8");
+const migration = readFileSync("supabase/migrations/20260903011558_role_field_permissions.sql", "utf8");
 const restrictedFieldsMigration = readFileSync("supabase/migrations/20260905040223_restrict_writer_item_fields.sql", "utf8");
 const appGuardMigration = readFileSync("supabase/migrations/20260901093257_must_change_password_app_guard.sql", "utf8");
 const fieldsRoute = readFileSync("src/app/api/items/[itemId]/fields/route.ts", "utf8");

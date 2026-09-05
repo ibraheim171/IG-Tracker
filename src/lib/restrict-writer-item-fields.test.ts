@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const migration = readFileSync("supabase/migrations/20260905040223_restrict_writer_item_fields.sql", "utf8");
-const roleMigration = readFileSync("supabase/migrations/20260902131635_role_field_permissions.sql", "utf8");
+const roleMigration = readFileSync("supabase/migrations/20260903011558_role_field_permissions.sql", "utf8");
 const saveBlock = migration.match(/create or replace function public\.save_item_fields\([\s\S]*?\r?\nend\r?\n\$\$;/)?.[0] ?? "";
 
 test("save_item_fields has explicit admin, writer, and producer allowlists", () => {
