@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { canEditItemAssignments, validateAdminCreateItemPayload, validateAdminCreateTrackPayload } from "./admin-create-item.ts";
+import { buildDraftCreateItemPayload, canEditItemAssignments, validateAdminCreateItemPayload, validateAdminCreateTrackPayload } from "./admin-create-item.ts";
 import { buildMyMaterials, type ParticipantItemRow } from "./my-materials-data.ts";
 
 const creationMigration = readFileSync("supabase/migrations/20260903071931_admin_create_items_tracks.sql", "utf8");
@@ -23,9 +23,6 @@ const uuidC = "33333333-3333-4333-8333-333333333333";
 test("admin create item validator allows safe payload and rejects forbidden or unsafe fields atomically", () => {
   const ok = validateAdminCreateItemPayload({
     title: "عنوان",
-    writer_id: uuidA,
-    producer_id: uuidB,
-    reviewer_id: uuidC,
     track_id: 1,
     idea_type_id: 2,
     caption: "نص",
@@ -38,28 +35,72 @@ test("admin create item validator allows safe payload and rejects forbidden or u
   if (ok.ok) assert.deepEqual(ok.value.partner_ids, [1, 2]);
 
   for (const value of ["http://example.com", "javascript:alert(1)", "data:text/html,hi", "plain text"]) {
-    const result = validateAdminCreateItemPayload({ title: "عنوان", writer_id: uuidA, writer_delivery_url: value });
+    const result = validateAdminCreateItemPayload({ title: "عنوان", writer_delivery_url: value });
     assert.equal(result.ok, false);
     assert.equal(result.code, "E_INVALID_LINK");
   }
 
-  assert.equal(validateAdminCreateItemPayload({ title: "عنوان", writer_id: uuidA, status: "published" }).ok, false);
-  assert.equal(validateAdminCreateItemPayload({ title: "عنوان", writer_id: uuidA, partner_ids: [1, "bad"] }).ok, false);
+  assert.equal(validateAdminCreateItemPayload({ title: "عنوان", status: "published" }).ok, false);
+  assert.equal(validateAdminCreateItemPayload({ title: "عنوان", writer_id: uuidA }).ok, false);
+  assert.equal(validateAdminCreateItemPayload({ title: "عنوان", producer_id: uuidB }).ok, false);
+  assert.equal(validateAdminCreateItemPayload({ title: "عنوان", reviewer_id: uuidC }).ok, false);
+  assert.equal(validateAdminCreateItemPayload({ title: "عنوان", partner_ids: [1, "bad"] }).ok, false);
 });
 
-test("minimal idea draft needs only a title and delays operational assignments", () => {
+test("minimal idea draft sends only a title and delays operational assignments", () => {
   const minimal = validateAdminCreateItemPayload({ title: "فكرة أولية" });
   assert.equal(minimal.ok, true);
   if (minimal.ok) {
     assert.equal(minimal.value.title, "فكرة أولية");
-    assert.equal(minimal.value.writer_id, null);
-    assert.equal(minimal.value.producer_id, null);
-    assert.equal(minimal.value.reviewer_id, null);
+    assert.deepEqual(Object.keys(minimal.value), ["title"]);
   }
-  assert.equal(validateAdminCreateItemPayload({ title: "فكرة", writer_id: "not-a-uuid" }).ok, false);
+  const payload = buildDraftCreateItemPayload({
+    title: "فكرة أولية",
+    track_id: "",
+    idea_type_id: "",
+    caption: "",
+    notes: "",
+    writer_delivery_url: "",
+    production_file_url: "",
+    partner_ids: [],
+    new_partner_name: "",
+    slot_id: "",
+  });
+  assert.deepEqual(payload, { title: "فكرة أولية" });
+  assert.equal("writer_id" in payload || "producer_id" in payload || "reviewer_id" in payload, false);
   assert.match(createModal, /إضافة تفاصيل الآن/);
   assert.match(createModal, /حفظ كمسودة/);
   assert.match(createModal, /showDetails/);
+});
+
+test("draft builder includes only populated allowed fields and never converts empty values to forbidden keys", () => {
+  const payload = buildDraftCreateItemPayload({
+    title: "فكرة مكتملة",
+    track_id: "1",
+    idea_type_id: "2",
+    caption: " كابشن ",
+    notes: " ملاحظة ",
+    writer_delivery_url: "https://example.com/writer",
+    production_file_url: "https://example.com/production",
+    partner_ids: ["1", "2"],
+    new_partner_name: " شريك ",
+    slot_id: uuidA,
+  });
+  assert.deepEqual(payload, {
+    title: "فكرة مكتملة",
+    track_id: 1,
+    idea_type_id: 2,
+    caption: "كابشن",
+    notes: "ملاحظة",
+    writer_delivery_url: "https://example.com/writer",
+    production_file_url: "https://example.com/production",
+    partner_ids: [1, 2],
+    new_partner_name: "شريك",
+    slot_id: uuidA,
+  });
+  for (const field of ["status", "published_at", "ig_permalink", "writer_id", "producer_id", "reviewer_id"]) {
+    assert.equal(field in payload, false, `${field} must never reach the draft RPC`);
+  }
 });
 
 test("draft RPC uses an explicit allowlist and rejects workflow or ownership fields", () => {
@@ -194,6 +235,23 @@ test("create and assignment routes are same-origin admin-only RPC wrappers witho
   assert.match(createTrackRoute, /rpc\("admin_create_track"/);
   assert.match(assignmentsRoute, /rpc\("admin_save_item_assignments"/);
   assert.match(assignmentsRoute, /PUBLISHED_IMMUTABLE|safeRpcError/);
+  for (const field of ["status", "writer_id", "producer_id", "reviewer_id"]) {
+    assert.equal(validateAdminCreateItemPayload({ title: "فكرة", [field]: field === "status" ? "idea" : uuidA }).ok, false, `${field} direct API payload must fail`);
+  }
+});
+
+test("draft creation is atomic, prevents duplicate clicks, assigns separately, and refreshes after success", () => {
+  const draftWrapper = draftWorkflowMigration.match(/create function public\.admin_create_item\([\s\S]*?revoke execute on function public\.admin_create_item/)?.[0] ?? "";
+  assert.match(draftWrapper, /it := public\.create_item\(creation_fields\)/);
+  assert.equal(/exception\s+when\s+others/i.test(draftWrapper), false, "database errors must roll back the whole draft RPC");
+  assert.match(createModal, /if \(savingItem\) return;/);
+  assert.match(createModal, /disabled=\{!canSubmit\}/);
+  assert.match(createModal, /\/participants`, \{/);
+  assert.match(createModal, /writer_id: form\.writer_id\.trim\(\)/);
+  assert.match(createModal, /تم إنشاء المسودة، لكن تعذر تعيين مسؤول الإعداد/);
+  assert.match(slotsBoard, /setCreateMessage\(message\)/);
+  assert.match(slotsBoard, /router\.refresh\(\)/);
+  assert.match(createModal, /تم إنشاء المسودة بنجاح/);
 });
 
 test("track creation RPC is admin-only, server-generates slug, validates color, and closes direct browser writes", () => {

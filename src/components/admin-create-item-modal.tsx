@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import type { AdminCreateItemPayload, AdminCreatedItem, AdminCreatedTrack, TeamMemberOption } from "@/lib/admin-create-item";
+import { buildDraftCreateItemPayload, type AdminCreatedItem, type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
 import type { BoardSlot } from "@/lib/ui-data";
 import { formatHebronDateTime } from "@/lib/ui-data";
 import { useReferenceData } from "@/components/reference-data-provider";
@@ -9,7 +9,7 @@ import { useReferenceData } from "@/components/reference-data-provider";
 type Props = {
   open: boolean;
   onClose: () => void;
-  onCreated: (item: AdminCreatedItem) => void;
+  onCreated: (item: AdminCreatedItem, message: string) => void;
   slots: BoardSlot[];
   teamMembers: TeamMemberOption[];
 };
@@ -66,11 +66,6 @@ function membersByRole(teamMembers: TeamMemberOption[], role: "writer" | "produc
   return teamMembers
     .filter((member) => member.roles.includes(role))
     .sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
-}
-
-function optionalString(value: string) {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
 }
 
 export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMembers }: Props) {
@@ -171,21 +166,18 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
     setSavingItem(true);
     setMessage(null);
     try {
-      const payload: AdminCreateItemPayload = {
+      const payload = buildDraftCreateItemPayload({
         title: form.title,
-        track_id: form.track_id ? Number(form.track_id) : null,
-        idea_type_id: form.idea_type_id ? Number(form.idea_type_id) : null,
-        caption: optionalString(form.caption),
-        notes: optionalString(form.notes),
-        writer_delivery_url: optionalString(form.writer_delivery_url),
-        production_file_url: optionalString(form.production_file_url),
-        partner_ids: form.partner_ids.map(Number),
-        new_partner_name: optionalString(form.new_partner_name),
-        writer_id: optionalString(form.writer_id),
-        producer_id: optionalString(form.producer_id),
-        reviewer_id: optionalString(form.reviewer_id),
-        slot_id: optionalString(form.slot_id),
-      };
+        track_id: form.track_id,
+        idea_type_id: form.idea_type_id,
+        caption: form.caption,
+        notes: form.notes,
+        writer_delivery_url: form.writer_delivery_url,
+        production_file_url: form.production_file_url,
+        partner_ids: form.partner_ids,
+        new_partner_name: form.new_partner_name,
+        slot_id: form.slot_id,
+      });
       const response = await fetch("/api/admin/items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -198,8 +190,25 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
         return;
       }
 
+      let successMessage = "تم إنشاء المسودة بنجاح.";
+      if (form.writer_id.trim()) {
+        const assignments = await fetch(`/api/admin/items/${encodeURIComponent(result.item.id)}/participants`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            writer_id: form.writer_id.trim(),
+            ...(form.producer_id.trim() ? { producer_id: form.producer_id.trim() } : {}),
+            ...(form.reviewer_id.trim() ? { reviewer_id: form.reviewer_id.trim() } : {}),
+          }),
+        });
+        if (!assignments.ok) {
+          successMessage = "تم إنشاء المسودة، لكن تعذر تعيين مسؤول الإعداد. افتح المادة وأكمل التعيين.";
+        }
+      }
+
       resetForm();
-      onCreated(result.item);
+      onCreated(result.item, successMessage);
       onClose();
       window.setTimeout(() => returnFocusRef.current?.focus(), 0);
     } finally {
@@ -303,3 +312,4 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
     </div>
   );
 }
+

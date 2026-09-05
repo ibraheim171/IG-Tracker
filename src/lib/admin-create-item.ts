@@ -11,18 +11,28 @@ export type TeamMemberOption = {
 
 export type AdminCreateItemPayload = {
   title: string;
-  track_id?: number | null;
-  idea_type_id?: number | null;
-  caption?: string | null;
-  notes?: string | null;
-  writer_delivery_url?: string | null;
-  production_file_url?: string | null;
+  track_id?: number;
+  idea_type_id?: number;
+  caption?: string;
+  notes?: string;
+  writer_delivery_url?: string;
+  production_file_url?: string;
   partner_ids?: number[];
-  new_partner_name?: string | null;
-  writer_id?: string | null;
-  producer_id?: string | null;
-  reviewer_id?: string | null;
-  slot_id?: string | null;
+  new_partner_name?: string;
+  slot_id?: string;
+};
+
+export type DraftCreateFormValues = {
+  title: string;
+  track_id: string;
+  idea_type_id: string;
+  caption: string;
+  notes: string;
+  writer_delivery_url: string;
+  production_file_url: string;
+  partner_ids: string[];
+  new_partner_name: string;
+  slot_id: string;
 };
 
 export type AdminCreateTrackPayload = {
@@ -51,9 +61,6 @@ const allowedItemKeys = new Set([
   "production_file_url",
   "partner_ids",
   "new_partner_name",
-  "writer_id",
-  "producer_id",
-  "reviewer_id",
   "slot_id",
 ]);
 
@@ -80,8 +87,31 @@ function optionalNumber(value: unknown) {
 }
 
 function optionalUuid(value: unknown) {
-  if (value == null || value === "") return null;
   return typeof value === "string" && uuidPattern.test(value) ? value : undefined;
+}
+
+export function buildDraftCreateItemPayload(input: DraftCreateFormValues): AdminCreateItemPayload {
+  const payload: AdminCreateItemPayload = { title: input.title };
+  const trackId = input.track_id.trim();
+  const ideaTypeId = input.idea_type_id.trim();
+  const partnerIds = input.partner_ids.map((value) => Number(value));
+  const fields: Array<[keyof Pick<AdminCreateItemPayload, "caption" | "notes" | "writer_delivery_url" | "production_file_url" | "new_partner_name" | "slot_id">, string]> = [
+    ["caption", input.caption],
+    ["notes", input.notes],
+    ["writer_delivery_url", input.writer_delivery_url],
+    ["production_file_url", input.production_file_url],
+    ["new_partner_name", input.new_partner_name],
+    ["slot_id", input.slot_id],
+  ];
+
+  if (trackId) payload.track_id = Number(trackId);
+  if (ideaTypeId) payload.idea_type_id = Number(ideaTypeId);
+  if (input.partner_ids.length > 0) payload.partner_ids = partnerIds;
+  for (const [field, value] of fields) {
+    const trimmed = value.trim();
+    if (trimmed) payload[field] = trimmed;
+  }
+  return payload;
 }
 
 export function validateAdminCreateItemPayload(input: unknown): ValidationResult<AdminCreateItemPayload> {
@@ -98,16 +128,7 @@ export function validateAdminCreateItemPayload(input: unknown): ValidationResult
   const title = optionalText(body.title);
   if (!title) return { ok: false, code: "E_TITLE", message: "العنوان مطلوب." };
 
-  const writerId = optionalUuid(body.writer_id);
-  if (writerId === undefined) return { ok: false, code: "E_WRITER", message: "الكاتب المختار غير صحيح." };
-
-  const producerId = optionalUuid(body.producer_id);
-  if (producerId === undefined) return { ok: false, code: "E_PRODUCER", message: "المنتج المختار غير صحيح." };
-
-  const reviewerId = optionalUuid(body.reviewer_id);
-  if (reviewerId === undefined) return { ok: false, code: "E_REVIEWER", message: "المراجع المختار غير صحيح." };
-
-  const slotId = optionalUuid(body.slot_id);
+  const slotId = body.slot_id == null ? null : optionalUuid(body.slot_id);
   if (slotId === undefined) return { ok: false, code: "E_SLOT", message: "موعد النشر غير صحيح." };
 
   const trackId = optionalNumber(body.track_id);
@@ -131,24 +152,20 @@ export function validateAdminCreateItemPayload(input: unknown): ValidationResult
   }
   const partnerIds = Array.from(new Set(rawPartnerIds));
 
-  return {
-    ok: true,
-    value: {
-      title,
-      track_id: trackId,
-      idea_type_id: ideaTypeId,
-      caption: optionalText(body.caption),
-      notes: optionalText(body.notes),
-      writer_delivery_url: writerDeliveryUrl,
-      production_file_url: productionFileUrl,
-      partner_ids: partnerIds,
-      new_partner_name: optionalText(body.new_partner_name),
-      writer_id: writerId,
-      producer_id: producerId,
-      reviewer_id: reviewerId,
-      slot_id: slotId,
-    },
-  };
+  const value: AdminCreateItemPayload = { title };
+  if (trackId != null) value.track_id = trackId;
+  if (ideaTypeId != null) value.idea_type_id = ideaTypeId;
+  const caption = optionalText(body.caption);
+  const notes = optionalText(body.notes);
+  const newPartnerName = optionalText(body.new_partner_name);
+  if (caption) value.caption = caption;
+  if (notes) value.notes = notes;
+  if (writerDeliveryUrl) value.writer_delivery_url = writerDeliveryUrl;
+  if (productionFileUrl) value.production_file_url = productionFileUrl;
+  if (partnerIds.length > 0) value.partner_ids = partnerIds;
+  if (newPartnerName) value.new_partner_name = newPartnerName;
+  if (slotId) value.slot_id = slotId;
+  return { ok: true, value };
 }
 
 export function validateAdminCreateTrackPayload(input: unknown): ValidationResult<AdminCreateTrackPayload> {
@@ -204,3 +221,4 @@ export function safeRpcError(message: string | undefined, fallback: string) {
 export function toRpcJson(value: AdminCreateItemPayload | AdminCreateTrackPayload) {
   return value as unknown as Json;
 }
+

@@ -27,6 +27,7 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createMessage, setCreateMessage] = useState<string | null>(null);
   const isAdmin = isAdminRole(roles);
   const enrichedItems = useMemo(() => items.map((item) => {
     const track = tracks.find((candidate) => candidate.id === item.track_id);
@@ -68,6 +69,7 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
         </div>
         {isAdmin ? <button className="button" type="button" onClick={() => setCreateOpen(true)}>إضافة مادة</button> : null}
       </header>
+      {createMessage ? <p className="notice" role="status">{createMessage}</p> : null}
       <div className="slot-days">
         {dateKeys.map((dateKey) => {
           const firstSlot = groups.find((group) => group.dateKey === dateKey)?.slot;
@@ -114,7 +116,8 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
       <AdminCreateItemModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={(createdItem) => {
+        onCreated={(createdItem, message) => {
+          setCreateMessage(message);
           setOpenItemId(createdItem.id);
           router.refresh();
         }}
