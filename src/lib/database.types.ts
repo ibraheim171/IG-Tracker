@@ -712,6 +712,7 @@ export type Database = {
           notes: string | null
           priority: number | null
           production_file_url: string | null
+          writer_delivery_url: string | null
           published_at: string | null
           ref: string
           slot_id: string | null
@@ -742,6 +743,7 @@ export type Database = {
           title: string
           track_id?: number | null
           updated_at?: string
+          writer_delivery_url?: string | null
         }
         Update: {
           caption?: string | null
@@ -765,6 +767,7 @@ export type Database = {
           title?: string
           track_id?: number | null
           updated_at?: string
+          writer_delivery_url?: string | null
         }
         Relationships: [
           {
@@ -1376,6 +1379,7 @@ export type Database = {
           notes: string | null
           priority: number | null
           production_file_url: string | null
+          writer_delivery_url: string | null
           published_at: string | null
           ref: string
           slot_id: string | null
@@ -1416,6 +1420,7 @@ export type Database = {
           notes: string | null
           priority: number | null
           production_file_url: string | null
+          writer_delivery_url: string | null
           published_at: string | null
           ref: string
           slot_id: string | null
@@ -1432,6 +1437,16 @@ export type Database = {
         }
       }
       content_gate_signatures: { Args: never; Returns: number }
+      create_item: {
+        Args: { p_fields: Json }
+        Returns: Database["public"]["Tables"]["items"]["Row"]
+        SetofOptions: {
+          from: "*"
+          to: "items"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       ensure_slots: { Args: { p_weeks?: number }; Returns: number }
       has_role: {
         Args: { p_role: Database["public"]["Enums"]["role_name"] }
@@ -1468,6 +1483,7 @@ export type Database = {
           notes: string | null
           priority: number | null
           production_file_url: string | null
+          writer_delivery_url: string | null
           published_at: string | null
           ref: string
           slot_id: string | null
@@ -1482,6 +1498,67 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      admin_reassign_tasks: {
+        Args: {
+          p_dry_run?: boolean
+          p_parts: Database["public"]["Enums"]["participant_part"][]
+          p_reason?: string | null
+          p_source: string
+          p_target: string
+        }
+        Returns: Json
+      }
+      admin_create_item: {
+        Args: { p_fields: Json }
+        Returns: Database["public"]["Tables"]["items"]["Row"]
+        SetofOptions: {
+          from: "*"
+          to: "items"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      admin_create_track: {
+        Args: {
+          p_color_hex?: string
+          p_name: string
+          p_sort_order?: number | null
+        }
+        Returns: Database["public"]["Tables"]["tracks"]["Row"]
+        SetofOptions: {
+          from: "*"
+          to: "tracks"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      admin_save_item_assignments: {
+        Args: {
+          p_item: string
+          p_producer?: string | null
+          p_reviewer?: string | null
+          p_writer: string
+        }
+        Returns: Json
+      }
+      save_item_fields: {
+        Args: { p_fields: Json; p_item: string }
+        Returns: Database["public"]["Tables"]["items"]["Row"]
+        SetofOptions: {
+          from: "*"
+          to: "items"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      save_item_partners: {
+        Args: {
+          p_item: string
+          p_new_partner_name?: string
+          p_partner_ids?: number[]
+        }
+        Returns: Json
       }
       me: {
         Args: never
@@ -1522,6 +1599,7 @@ export type Database = {
           notes: string | null
           priority: number | null
           production_file_url: string | null
+          writer_delivery_url: string | null
           published_at: string | null
           ref: string
           slot_id: string | null
@@ -1553,7 +1631,7 @@ export type Database = {
         | "cancelled"
       link_state: "pending" | "confirmed" | "rejected"
       participant_part: "writer" | "producer" | "reviewer"
-      role_name: "writer" | "reviewer" | "producer" | "admin"
+      role_name: "writer" | "reviewer" | "producer" | "publisher" | "admin"
       slot_state: "open" | "assigned" | "published" | "skipped"
     }
     CompositeTypes: {
@@ -1697,7 +1775,7 @@ export const Constants = {
       ],
       link_state: ["pending", "confirmed", "rejected"],
       participant_part: ["writer", "producer", "reviewer"],
-      role_name: ["writer", "reviewer", "producer", "admin"],
+      role_name: ["writer", "reviewer", "producer", "publisher", "admin"],
       slot_state: ["open", "assigned", "published", "skipped"],
     },
   },
