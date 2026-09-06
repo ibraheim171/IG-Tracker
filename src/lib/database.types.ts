@@ -1357,6 +1357,17 @@ export type Database = {
       }
     }
     Functions: {
+      admin_import_historical_items: {
+        Args: {
+          p_dry_run?: boolean
+          p_preview_token?: string | null
+          p_reason: string
+          p_rows: Json
+          p_source_filename: string
+          p_source_sha256: string
+        }
+        Returns: Json
+      }
       advance_item: {
         Args: {
           p_item: string

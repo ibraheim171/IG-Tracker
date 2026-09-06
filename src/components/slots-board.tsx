@@ -3,6 +3,7 @@
 import { useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { AdminCreateItemModal } from "@/components/admin-create-item-modal";
+import { AdminHistoricalImportModal } from "@/components/admin-historical-import-modal";
 import { ItemDrawer } from "@/components/item-drawer";
 import { useReferenceData } from "@/components/reference-data-provider";
 import type { TeamMemberOption } from "@/lib/admin-create-item";
@@ -27,6 +28,7 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [historicalImportOpen, setHistoricalImportOpen] = useState(false);
   const [createMessage, setCreateMessage] = useState<string | null>(null);
   const isAdmin = isAdminRole(roles);
   const enrichedItems = useMemo(() => items.map((item) => {
@@ -67,7 +69,10 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
           <p className="eyebrow">الجدول</p>
           <h1>خطة النشر</h1>
         </div>
-        {isAdmin ? <button className="button" type="button" onClick={() => setCreateOpen(true)}>إضافة مادة</button> : null}
+        {isAdmin ? <div className="actions-row">
+          <button className="button button-secondary" type="button" onClick={() => setHistoricalImportOpen(true)}>استيراد تاريخي</button>
+          <button className="button" type="button" onClick={() => setCreateOpen(true)}>إضافة مادة</button>
+        </div> : null}
       </header>
       {createMessage ? <p className="notice" role="status">{createMessage}</p> : null}
       <div className="slot-days">
@@ -123,6 +128,14 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
         }}
         slots={slots}
         teamMembers={teamMembers}
+      />
+      <AdminHistoricalImportModal
+        open={historicalImportOpen}
+        onClose={() => setHistoricalImportOpen(false)}
+        onApplied={(message) => {
+          setCreateMessage(message);
+          router.refresh();
+        }}
       />
       <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} />
     </main>
