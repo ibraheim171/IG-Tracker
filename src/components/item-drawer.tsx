@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useReferenceData } from "@/components/reference-data-provider";
 import { canEditItemAssignments, type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
+import { restoreDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
+import { executeInstagramPublish, isInstagramPermalink } from "@/lib/operational-ui";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/lib/database.types";
 import type { DrawerPreview, IdeaTypeOption, ItemStatus, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
@@ -83,6 +85,9 @@ type Props = {
   currentUserId: string;
   roles: RoleName[];
   teamMembers?: TeamMemberOption[];
+  teamMembersLoadError?: string | null;
+  onRetryTeamMembers?: () => void | Promise<void>;
+  retryingTeamMembers?: boolean;
   largeCaption?: boolean;
 };
 
@@ -197,7 +202,7 @@ function findIdeaType(ideaTypes: IdeaTypeOption[], item: ItemRow | DrawerPreview
   return ideaTypes.find((ideaType) => ideaType.id === item?.idea_type_id) ?? null;
 }
 
-export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, teamMembers = [], largeCaption }: Props) {
+export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, teamMembers = [], teamMembersLoadError = null, onRetryTeamMembers, retryingTeamMembers = false, largeCaption }: Props) {
   const { tracks, ideaTypes, partners, refreshReferenceData } = useReferenceData();
   const supabase = useMemo(() => createClient(), []);
   const loadSequence = useRef(0);
@@ -214,6 +219,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const actionInFlightRef = useRef(false);
   const confirmDialogRef = useRef<HTMLElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
+  const drawerReturnFocusRef = useRef<HTMLElement | null>(null);
   const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
   const confirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
@@ -294,6 +300,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     }, 0);
 
     function handleConfirmKeydown(event: KeyboardEvent) {
+      if (event.key === "Tab") trapDialogFocus(event, confirmDialogRef.current);
       if (event.key === "Escape") {
         event.preventDefault();
         settleConfirmation(false);
@@ -308,10 +315,19 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }, [confirmDialog]);
 
   useEffect(() => {
+    if (!itemId) {
+      drawerReturnFocusRef.current = null;
+      return;
+    }
+    drawerReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }, [itemId]);
+
+  useEffect(() => {
     if (!itemId || confirmDialog) return;
 
     drawerRef.current?.focus();
     function handleDrawerKeydown(event: KeyboardEvent) {
+      if (event.key === "Tab") trapDialogFocus(event, drawerRef.current);
       if (event.key === "Escape" && !actionInFlightRef.current && !trackSaving) {
         event.preventDefault();
         void handleClose();
@@ -621,6 +637,10 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       }
 
       onClose();
+      window.setTimeout(() => {
+        restoreDialogFocus(drawerReturnFocusRef.current);
+        drawerReturnFocusRef.current = null;
+      }, 0);
     } finally {
       closeInFlightRef.current = false;
     }
@@ -786,13 +806,15 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   async function markPublished() {
-    if (!item || !publishPermalink.trim()) return;
-    const { error } = await supabase.rpc("mark_published", {
+    if (!item || !isInstagramPermalink(publishPermalink)) return;
+    const result = await executeInstagramPublish(publishPermalink, (permalink) => supabase.rpc("mark_published", {
       p_item: item.id,
-      p_permalink: publishPermalink.trim(),
+      p_permalink: permalink,
       p_at: undefined,
       p_override_reason: undefined,
-    });
+    }));
+    if (!result.started) return;
+    const { error } = result.value;
     if (error) {
       setMessage(parseRuleMessage(extractMessage(error)));
       return;
@@ -869,6 +891,13 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               <section className="meta-grid">
                 <div><span className="meta-label">الشركاء</span><div className="pill-row">{drawerDetails.partners.length ? drawerDetails.partners.map((row) => <span className="pill" key={row.partner_id}>{partnerName(row.partners)}</span>) : <span>—</span>}</div></div>
                 <div><span className="meta-label">الفريق</span><div className="pill-row">{drawerDetails.participants.length ? drawerDetails.participants.map((row) => <span className="pill" key={`${row.user_id}-${row.part}`}>{profileName(row.profiles)} · {row.part === "writer" ? "كاتب" : row.part === "producer" ? "منتج" : "مراجع"}</span>) : <span>—</span>}</div></div>
+              </section>
+            ) : null}
+
+            {isAdmin && teamMembersLoadError ? (
+              <section className="notice stack" role="alert">
+                <p>{teamMembersLoadError}</p>
+                {onRetryTeamMembers ? <button className="button button-secondary" type="button" disabled={retryingTeamMembers || actionDisabled} onClick={() => { void onRetryTeamMembers(); }}>{retryingTeamMembers ? "جارٍ تحميل أعضاء الفريق..." : "إعادة تحميل أعضاء الفريق"}</button> : null}
               </section>
             ) : null}
 
@@ -1050,7 +1079,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                   </>
                 ) : item.status === "in_production" ? <p className="muted">{isProducer ? "بانتظار مراجع." : "بانتظار الإنتاج والمراجعة."}</p> : null}
                 {item.status === "design_approved" && permissions.canMoveReady ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("ready"))}>جاهزة للنشر</button> : null}
-                {item.status === "ready" && permissions.canMarkPublished ? <><label className="field">رابط منشور إنستغرام<input className="input" inputMode="url" placeholder="https://www.instagram.com/p/..." value={publishPermalink} onChange={(event) => setPublishPermalink(event.target.value)} /></label><button className="button" type="button" disabled={!safeHttpsHref(publishPermalink) || actionDisabled} onClick={() => runAction(markPublished)}>تم النشر</button></> : item.status === "ready" ? <p className="muted">بانتظار مسؤول النشر.</p> : null}
+                {item.status === "ready" && permissions.canMarkPublished ? <><label className="field">رابط منشور إنستغرام<input className="input" inputMode="url" placeholder="https://www.instagram.com/p/..." value={publishPermalink} onChange={(event) => setPublishPermalink(event.target.value)} /></label><button className="button" type="button" disabled={!isInstagramPermalink(publishPermalink) || actionDisabled} onClick={() => runAction(markPublished)}>تم النشر</button></> : item.status === "ready" ? <p className="muted">بانتظار مسؤول النشر.</p> : null}
                 {isAdmin && failedAdvance ? (
                   <div className="override-box">
                     <p className="eyebrow">تجاوز إداري</p>

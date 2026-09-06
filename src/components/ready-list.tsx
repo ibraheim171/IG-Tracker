@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { useRouter } from "next/navigation";
 import { ItemDrawer } from "@/components/item-drawer";
 import type { TeamMemberOption } from "@/lib/admin-create-item";
+import { fetchAdminTeamMembers } from "@/lib/admin-team-members";
+import { restoreDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
 import { isPublisherRole, safeHttpsHref } from "@/lib/item-permissions";
 import { createSingleFlight, isInstagramPermalink } from "@/lib/operational-ui";
 import { createClient } from "@/lib/supabase/client";
@@ -15,6 +17,7 @@ type Props = {
   currentUserId: string;
   roles: RoleName[];
   teamMembers?: TeamMemberOption[];
+  teamMembersLoadError?: string | null;
   loadError?: string | null;
 };
 
@@ -39,11 +42,13 @@ function previewFromReady(item: ReadyItem): DrawerPreview {
   };
 }
 
-export function ReadyList({ initialItems, currentUserId, roles, teamMembers = [], loadError = null }: Props) {
+export function ReadyList({ initialItems, currentUserId, roles, teamMembers: initialTeamMembers = [], teamMembersLoadError: initialTeamMembersLoadError = null, loadError = null }: Props) {
   const supabase = createClient();
   const router = useRouter();
   const publishFlight = useRef(createSingleFlight());
   const publishDialogRef = useRef<HTMLFormElement | null>(null);
+  const publishReturnFocusRef = useRef<HTMLElement | null>(null);
+  const readyHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const [items, setItems] = useState(initialItems);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [publishItem, setPublishItem] = useState<ReadyItem | null>(null);
@@ -52,6 +57,9 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
   const [overrideReason, setOverrideReason] = useState("");
   const [blocked, setBlocked] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [teamMembers, setTeamMembers] = useState(initialTeamMembers);
+  const [teamMembersError, setTeamMembersError] = useState(initialTeamMembersLoadError);
+  const [retryingTeamMembers, setRetryingTeamMembers] = useState(false);
   const isAdmin = isAdminRole(roles);
   const canPublish = isPublisherRole(roles);
   const linkLooksValid = isInstagramPermalink(permalink);
@@ -65,22 +73,52 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
   }, [initialItems]);
 
   useEffect(() => {
+    setTeamMembers(initialTeamMembers);
+    setTeamMembersError(initialTeamMembersLoadError);
+  }, [initialTeamMembers, initialTeamMembersLoadError]);
+
+  useEffect(() => {
     if (!publishItem) return;
 
     publishDialogRef.current?.focus();
     function handleKeydown(event: KeyboardEvent) {
+      if (event.key === "Tab") trapDialogFocus(event, publishDialogRef.current);
       if (event.key === "Escape" && !isPublishing) {
         event.preventDefault();
-        setPublishItem(null);
+        closePublishDialog();
       }
     }
     document.addEventListener("keydown", handleKeydown);
     return () => document.removeEventListener("keydown", handleKeydown);
   }, [isPublishing, publishItem]);
 
+  function closePublishDialog() {
+    if (isPublishing) return;
+    setPublishItem(null);
+    window.setTimeout(() => {
+      restoreDialogFocus(publishReturnFocusRef.current, readyHeadingRef.current);
+      publishReturnFocusRef.current = null;
+    }, 0);
+  }
+
+  function openPublishDialog(item: ReadyItem, trigger: HTMLElement) {
+    publishReturnFocusRef.current = trigger;
+    setPublishItem(item);
+  }
+
+  async function retryTeamMembers() {
+    if (retryingTeamMembers) return;
+    setRetryingTeamMembers(true);
+    const result = await fetchAdminTeamMembers();
+    setTeamMembers(result.teamMembers);
+    setTeamMembersError(result.error);
+    setRetryingTeamMembers(false);
+  }
+
   async function publish(override: string | null = null) {
     if (!publishItem || !linkLooksValid) return;
     await publishFlight.current(async () => {
+      let didPublish = false;
       setIsPublishing(true);
       try {
         const { error } = await supabase.rpc("mark_published", {
@@ -99,12 +137,19 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
         setOverrideReason("");
         setBlocked(false);
         setMessage(null);
+        didPublish = true;
         router.refresh();
       } catch (error) {
         setBlocked(true);
         setMessage(parseRuleMessage(extractMessage(error)));
       } finally {
         setIsPublishing(false);
+        if (didPublish) {
+          window.setTimeout(() => {
+            restoreDialogFocus(publishReturnFocusRef.current, readyHeadingRef.current);
+            publishReturnFocusRef.current = null;
+          }, 0);
+        }
       }
     });
   }
@@ -114,9 +159,18 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
       <header className="screen-head">
         <div>
           <p className="eyebrow">النشر</p>
-          <h1>جاهز للنشر</h1>
+          <h1 ref={readyHeadingRef} tabIndex={-1}>جاهز للنشر</h1>
         </div>
       </header>
+
+      {isAdmin && teamMembersError ? (
+        <section className="card stack" role="alert">
+          <p>{teamMembersError}</p>
+          <button className="button button-secondary" type="button" disabled={retryingTeamMembers} onClick={() => { void retryTeamMembers(); }}>
+            {retryingTeamMembers ? "جارٍ تحميل أعضاء الفريق..." : "إعادة تحميل أعضاء الفريق"}
+          </button>
+        </section>
+      ) : null}
 
       {loadError ? (
         <section className="card stack" role="alert">
@@ -140,7 +194,7 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
                 {item.production_file_url && safeHttpsHref(item.production_file_url) ? <button className="button button-secondary" type="button" onClick={() => navigator.clipboard.writeText(safeHttpsHref(item.production_file_url) ?? "")}>نسخ رابط الإنتاج</button> : null}
                 {item.production_file_url && !safeHttpsHref(item.production_file_url) ? <span>رابط غير صالح</span> : null}
                 <button className="button button-secondary" type="button" onClick={() => setOpenItemId(item.id)}>فتح البطاقة</button>
-                {canPublish ? <button className="button" type="button" onClick={() => setPublishItem(item)}>تم النشر</button> : null}
+                {canPublish ? <button className="button" type="button" onClick={(event) => openPublishDialog(item, event.currentTarget)}>تم النشر</button> : null}
               </div>
             </article>
           ))}
@@ -148,7 +202,7 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
       ) : <section className="card"><p>لا توجد مواد جاهزة للنشر.</p></section>}
 
       {canPublish && publishItem ? (
-        <div className="veil" onClick={() => { if (!isPublishing) setPublishItem(null); }}>
+        <div className="veil" onClick={closePublishDialog}>
           <form aria-labelledby="ready-publish-title" aria-modal="true" className="confirm-panel stack" onSubmit={(event) => { event.preventDefault(); void publish(); }} onClick={(event) => event.stopPropagation()} ref={publishDialogRef} role="dialog" tabIndex={-1}>
             <h2 id="ready-publish-title">تأكيد النشر</h2>
             {message ? <p className="notice" role="alert">{message}</p> : null}
@@ -160,12 +214,12 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
                 <button className="button" type="button" disabled={!overrideReason.trim() || isPublishing} onClick={() => { void publish(overrideReason.trim()); }}>{isPublishing ? "جارٍ حفظ النشر..." : "تجاوز ونفّذ"}</button>
               </div>
             ) : null}
-            <button className="button button-secondary" type="button" disabled={isPublishing} onClick={() => setPublishItem(null)}>إلغاء</button>
+            <button className="button button-secondary" type="button" disabled={isPublishing} onClick={closePublishDialog}>إلغاء</button>
           </form>
         </div>
       ) : null}
 
-      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} teamMembersLoadError={teamMembersError} onRetryTeamMembers={retryTeamMembers} retryingTeamMembers={retryingTeamMembers} />
     </main>
   );
 }

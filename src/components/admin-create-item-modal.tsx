@@ -12,6 +12,9 @@ type Props = {
   onCreated: (item: AdminCreatedItem, message: string) => void;
   slots: BoardSlot[];
   teamMembers: TeamMemberOption[];
+  teamMembersLoadError?: string | null;
+  onRetryTeamMembers?: () => void | Promise<void>;
+  retryingTeamMembers?: boolean;
 };
 
 type FormState = {
@@ -68,7 +71,7 @@ function membersByRole(teamMembers: TeamMemberOption[], role: "writer" | "produc
     .sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
 }
 
-export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMembers }: Props) {
+export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMembers, teamMembersLoadError = null, onRetryTeamMembers, retryingTeamMembers = false }: Props) {
   const { tracks, ideaTypes, partners, refreshReferenceData } = useReferenceData();
   const panelRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -240,6 +243,12 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
         </header>
 
         {message ? <p className="notice" role="status">{message}</p> : null}
+        {teamMembersLoadError ? (
+          <section className="notice stack" role="alert">
+            <p>{teamMembersLoadError}</p>
+            {onRetryTeamMembers ? <button className="button button-secondary" type="button" disabled={retryingTeamMembers || savingItem || savingTrack} onClick={() => { void onRetryTeamMembers(); }}>{retryingTeamMembers ? "جارٍ تحميل أعضاء الفريق..." : "إعادة تحميل أعضاء الفريق"}</button> : null}
+          </section>
+        ) : null}
 
         <form className="stack" onSubmit={submit}>
           <label className="field">العنوان<input className="input" required value={form.title} onChange={(event) => patchForm({ title: event.target.value })} /></label>

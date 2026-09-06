@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { AdminCreateItemModal } from "@/components/admin-create-item-modal";
 import { ItemDrawer } from "@/components/item-drawer";
 import { useReferenceData } from "@/components/reference-data-provider";
 import type { TeamMemberOption } from "@/lib/admin-create-item";
+import { fetchAdminTeamMembers } from "@/lib/admin-team-members";
 import type { BoardItem, BoardSlot, RoleName } from "@/lib/ui-data";
 import { arabicDayName, formatHebronDateTime, isAdminRole, relativeDayLabel } from "@/lib/ui-data";
 import { workflowLabel } from "@/lib/workflow-ui";
@@ -16,6 +17,7 @@ type Props = {
   currentUserId: string;
   roles: RoleName[];
   teamMembers: TeamMemberOption[];
+  teamMembersLoadError?: string | null;
   loadError?: string | null;
 };
 
@@ -23,13 +25,30 @@ function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers, loadError = null }: Props) {
+export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers: initialTeamMembers, teamMembersLoadError: initialTeamMembersLoadError = null, loadError = null }: Props) {
   const { tracks, ideaTypes } = useReferenceData();
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createMessage, setCreateMessage] = useState<string | null>(null);
+  const [teamMembers, setTeamMembers] = useState(initialTeamMembers);
+  const [teamMembersError, setTeamMembersError] = useState(initialTeamMembersLoadError);
+  const [retryingTeamMembers, setRetryingTeamMembers] = useState(false);
   const isAdmin = isAdminRole(roles);
+
+  useEffect(() => {
+    setTeamMembers(initialTeamMembers);
+    setTeamMembersError(initialTeamMembersLoadError);
+  }, [initialTeamMembers, initialTeamMembersLoadError]);
+
+  async function retryTeamMembers() {
+    if (retryingTeamMembers) return;
+    setRetryingTeamMembers(true);
+    const result = await fetchAdminTeamMembers();
+    setTeamMembers(result.teamMembers);
+    setTeamMembersError(result.error);
+    setRetryingTeamMembers(false);
+  }
   const enrichedItems = useMemo(() => items.map((item) => {
     const track = tracks.find((candidate) => candidate.id === item.track_id);
     const ideaType = ideaTypes.find((candidate) => candidate.id === item.idea_type_id);
@@ -71,6 +90,14 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers, lo
         {isAdmin ? <button className="button" type="button" onClick={() => setCreateOpen(true)}>إضافة مادة</button> : null}
       </header>
       {createMessage ? <p className="notice" role="status">{createMessage}</p> : null}
+      {isAdmin && teamMembersError ? (
+        <section className="card stack" role="alert">
+          <p>{teamMembersError}</p>
+          <button className="button button-secondary" type="button" disabled={retryingTeamMembers} onClick={() => { void retryTeamMembers(); }}>
+            {retryingTeamMembers ? "جارٍ تحميل أعضاء الفريق..." : "إعادة تحميل أعضاء الفريق"}
+          </button>
+        </section>
+      ) : null}
       {loadError ? (
         <section className="card stack" role="alert">
           <p>{loadError}</p>
@@ -131,8 +158,11 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers, lo
         }}
         slots={slots}
         teamMembers={teamMembers}
+        teamMembersLoadError={teamMembersError}
+        onRetryTeamMembers={retryTeamMembers}
+        retryingTeamMembers={retryingTeamMembers}
       />
-      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} teamMembersLoadError={teamMembersError} onRetryTeamMembers={retryTeamMembers} retryingTeamMembers={retryingTeamMembers} />
     </main>
   );
 }
