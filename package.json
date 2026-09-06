@@ -11,6 +11,7 @@
     "test:restrict-writer-item-fields": "node --test src/lib/restrict-writer-item-fields.test.ts",
     "test:admin-reassign-tasks": "node --test src/lib/admin-reassign-tasks.test.ts",
     "test:admin-create-item": "node --test src/lib/admin-create-item.test.ts",
+    "test:historical-import": "node --test src/lib/admin-historical-import.test.ts",
     "test:workflow-ui": "node --test src/lib/workflow-ui.test.ts"
   },
   "dependencies": {
