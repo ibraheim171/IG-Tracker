@@ -2,26 +2,33 @@
 
 import { useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
+import { AdminCreateItemModal } from "@/components/admin-create-item-modal";
 import { ItemDrawer } from "@/components/item-drawer";
 import { useReferenceData } from "@/components/reference-data-provider";
+import type { TeamMemberOption } from "@/lib/admin-create-item";
 import type { BoardItem, BoardSlot, RoleName } from "@/lib/ui-data";
-import { arabicDayName, formatHebronDateTime, relativeDayLabel } from "@/lib/ui-data";
+import { arabicDayName, formatHebronDateTime, isAdminRole, relativeDayLabel } from "@/lib/ui-data";
+import { workflowLabel } from "@/lib/workflow-ui";
 
 type Props = {
   slots: BoardSlot[];
   items: BoardItem[];
   currentUserId: string;
   roles: RoleName[];
+  teamMembers: TeamMemberOption[];
 };
 
 function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function SlotsBoard({ slots, items, currentUserId, roles }: Props) {
+export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: Props) {
   const { tracks, ideaTypes } = useReferenceData();
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createMessage, setCreateMessage] = useState<string | null>(null);
+  const isAdmin = isAdminRole(roles);
   const enrichedItems = useMemo(() => items.map((item) => {
     const track = tracks.find((candidate) => candidate.id === item.track_id);
     const ideaType = ideaTypes.find((candidate) => candidate.id === item.idea_type_id);
@@ -60,7 +67,9 @@ export function SlotsBoard({ slots, items, currentUserId, roles }: Props) {
           <p className="eyebrow">الجدول</p>
           <h1>خطة النشر</h1>
         </div>
+        {isAdmin ? <button className="button" type="button" onClick={() => setCreateOpen(true)}>إضافة مادة</button> : null}
       </header>
+      {createMessage ? <p className="notice" role="status">{createMessage}</p> : null}
       <div className="slot-days">
         {dateKeys.map((dateKey) => {
           const firstSlot = groups.find((group) => group.dateKey === dateKey)?.slot;
@@ -88,8 +97,10 @@ export function SlotsBoard({ slots, items, currentUserId, roles }: Props) {
                           {slotItems.map((item) => (
                             <button className="item-row" type="button" key={item.id} style={trackStyle(item.track_color)} onClick={() => setOpenItemId(item.id)}>
                               <span className="item-title">{item.title}</span>
-                              <span className="muted">{item.idea_type ?? "—"}</span>
-                              {item.waiting_on ? <span className="pill">{item.waiting_on}</span> : null}
+                              <span className="item-card-meta"><b>المسار</b> {item.track_name ?? "—"}</span>
+                              <span className="item-card-meta"><b>المسؤول الحالي</b> {item.current_assignees.length ? item.current_assignees.join("، ") : item.status === "design_approved" || item.status === "ready" ? "مسؤول النشر" : "—"}</span>
+                              <span className="pill">{workflowLabel(item.status)}</span>
+                              {item.waiting_on ? <span className="item-warning">متوقفة: {item.waiting_on}</span> : null}
                             </button>
                           ))}
                         </div>
@@ -102,7 +113,18 @@ export function SlotsBoard({ slots, items, currentUserId, roles }: Props) {
           );
         })}
       </div>
-      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} />
+      <AdminCreateItemModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={(createdItem, message) => {
+          setCreateMessage(message);
+          setOpenItemId(createdItem.id);
+          router.refresh();
+        }}
+        slots={slots}
+        teamMembers={teamMembers}
+      />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} />
     </main>
   );
 }

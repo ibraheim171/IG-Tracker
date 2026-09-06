@@ -1,13 +1,24 @@
 "use client";
 
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  compatibleOperationalParts,
+  operationalPartLabels,
+  operationalPartsForRoles,
+  toReassignTasksResult,
+  type OperationalPart,
+  type ReassignTasksResult,
+} from "@/lib/admin-reassign-tasks";
 import { createEmptyUserDraft, type PasswordMode } from "@/lib/admin-users-form";
 import { type AdminUser, allowedRoles, roleLabels, type Role } from "@/lib/admin-users";
+import type { Json } from "@/lib/database.types";
+import { statusLabels } from "@/lib/ui-data";
 
 type ApiResponse = { error?: string; code?: string; user?: AdminUser; users?: AdminUser[]; temporaryPassword?: string; deleted?: boolean; id?: string; auditPending?: boolean; authDeleted?: boolean; profileCleanupPending?: boolean; references?: { label: string; count: number }[] };
 type EditingState = { user: AdminUser; displayName: string; email: string; roles: Role[]; active: boolean; reason: string };
 type PasswordState = { user: AdminUser; passwordMode: PasswordMode; temporaryPassword: string };
 type DeleteState = { user: AdminUser; reason: string; references?: { label: string; count: number }[] };
+type ReassignState = { source: AdminUser; targetId: string; parts: OperationalPart[]; reason: string; preview: ReassignTasksResult | null; previewDirty: boolean };
 type ConfirmState = { title: string; body: string; confirmLabel: string; danger?: boolean; onConfirm: () => Promise<void> };
 
 export function UsersManager({ initialUsers, initialError = "" }: { initialUsers: AdminUser[]; initialError?: string }) {
@@ -21,6 +32,7 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [resetting, setResetting] = useState<PasswordState | null>(null);
   const [deleting, setDeleting] = useState<DeleteState | null>(null);
+  const [reassigning, setReassigning] = useState<ReassignState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
 
   const filteredUsers = useMemo(() => {
@@ -34,6 +46,33 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
     const payload: unknown = await response.json();
     if (!response.ok || !isResponse(payload)) throw new Error(isResponse(payload) ? `${payload.error} [${payload.code ?? "E_REQUEST"}]` : "تعذر حفظ التغييرات. [E_REQUEST]");
     return payload;
+  }
+
+  async function requestReassign(body: ReassignState, dryRun: boolean) {
+    const response = await fetch("/api/admin/reassign-tasks", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceUserId: body.source.id,
+        targetUserId: body.targetId,
+        parts: body.parts,
+        reason: body.reason,
+        dryRun,
+      }),
+    });
+    const payload: unknown = await response.json();
+    const result = toReassignTasksResult(payload as Json);
+    if (!response.ok || !result?.ok) {
+      const error = typeof payload === "object" && payload !== null && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : "تعذر نقل المهام.";
+      const code = typeof payload === "object" && payload !== null && "code" in payload && typeof payload.code === "string"
+        ? payload.code
+        : "E_REASSIGN";
+      throw new Error(`${error} [${code}]`);
+    }
+    return result;
   }
 
   async function createUser(event: FormEvent<HTMLFormElement>) {
@@ -125,6 +164,34 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
     finally { setSaving(false); }
   }
 
+  function openReassign(source: AdminUser) {
+    const target = users.find((user) => user.id !== source.id && user.active) ?? null;
+    const initialParts = target ? compatibleOperationalParts(source.roles, target.roles) : operationalPartsForRoles(source.roles);
+    setError("");
+    setReassigning({ source, targetId: target?.id ?? "", parts: initialParts, reason: "", preview: null, previewDirty: true });
+  }
+
+  async function previewReassign() {
+    if (!reassigning || saving) return;
+    setError(""); setSaving(true);
+    try {
+      const preview = await requestReassign(reassigning, true);
+      setReassigning((current) => current ? { ...current, preview, previewDirty: false } : current);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "تعذر تجهيز المعاينة."); }
+    finally { setSaving(false); }
+  }
+
+  async function executeReassign() {
+    if (!reassigning || saving || reassigning.previewDirty || !reassigning.preview) return;
+    setError(""); setSaving(true);
+    try {
+      const result = await requestReassign(reassigning, false);
+      setError(`تم نقل ${formatCount(result.removed_assignments ?? result.total_items ?? 0)}. رقم العملية: ${result.action_id ?? "—"}`);
+      setReassigning(null); setConfirm(null);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "تعذر تنفيذ النقل."); }
+    finally { setSaving(false); }
+  }
+
   function submitEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editing) return;
@@ -170,7 +237,7 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
       <label className="field">بحث<input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="الاسم أو البريد" /></label>
       {listError && <p className="error" role="alert">{listError}</p>}
       {!listError && filteredUsers.length === 0 && <p className="notice">لا توجد حسابات مطابقة.</p>}
-      {filteredUsers.length > 0 && <div className="table-wrap"><table className="users-table"><thead><tr><th>الاسم</th><th>البريد</th><th>الأدوار</th><th>الحالة</th><th>تاريخ الإنشاء</th><th>آخر دخول</th><th>إجراءات</th></tr></thead><tbody>{filteredUsers.map((user) => <tr key={user.id}><td className="user-name-cell">{user.display_name}</td><td className="email-cell num">{user.email || "—"}</td><td className="roles-cell">{formatRoles(user.roles)}</td><td><span className={user.active ? "status-pill is-active" : "status-pill"}>{user.active ? "نشط" : "معطّل"}</span></td><DateCell value={user.created_at} /><DateCell value={user.last_sign_in_at} /><td className="actions-cell"><div className="user-actions"><button className="button button-secondary" type="button" disabled={saving} onClick={() => setEditing({ user, displayName: user.display_name, email: user.email, roles: user.roles, active: user.active, reason: "" })}>تعديل</button><button className="button button-secondary" type="button" disabled={saving} onClick={() => setResetting({ user, passwordMode: "generated", temporaryPassword: "" })}>كلمة المرور</button><button className="button button-danger" type="button" disabled={saving} onClick={() => setDeleting({ user, reason: "" })}>حذف</button></div></td></tr>)}</tbody></table></div>}
+      {filteredUsers.length > 0 && <div className="table-wrap"><table className="users-table"><thead><tr><th>الاسم</th><th>البريد</th><th>الأدوار</th><th>الحالة</th><th>تاريخ الإنشاء</th><th>آخر دخول</th><th>إجراءات</th></tr></thead><tbody>{filteredUsers.map((user) => <tr key={user.id}><td className="user-name-cell">{user.display_name}</td><td className="email-cell num">{user.email || "—"}</td><td className="roles-cell">{formatRoles(user.roles)}</td><td><span className={user.active ? "status-pill is-active" : "status-pill"}>{user.active ? "نشط" : "معطّل"}</span></td><DateCell value={user.created_at} /><DateCell value={user.last_sign_in_at} /><td className="actions-cell"><div className="user-actions"><button className="button button-secondary" type="button" disabled={saving} onClick={() => setEditing({ user, displayName: user.display_name, email: user.email, roles: user.roles, active: user.active, reason: "" })}>تعديل</button><button className="button button-secondary" type="button" disabled={saving} onClick={() => openReassign(user)}>نقل المهام</button><button className="button button-secondary" type="button" disabled={saving} onClick={() => setResetting({ user, passwordMode: "generated", temporaryPassword: "" })}>كلمة المرور</button><button className="button button-danger" type="button" disabled={saving} onClick={() => setDeleting({ user, reason: "" })}>حذف</button></div></td></tr>)}</tbody></table></div>}
     </section>
 
     {editing && <Modal title="تعديل الحساب" onClose={() => setEditing(null)}>
@@ -179,10 +246,29 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
         <label className="field">البريد الإلكتروني<input className="input" type="email" value={editing.email} onChange={(event) => setEditing({ ...editing, email: event.target.value })} required /></label>
         <RoleChecks selected={editing.roles} onChange={(roles) => setEditing({ ...editing, roles })} />
         <label className="toggle-row"><input type="checkbox" checked={editing.active} onChange={(event) => setEditing({ ...editing, active: event.target.checked })} /> <span>{editing.active ? "الحساب نشط" : "الحساب معطّل"}</span></label>
+        {!editing.active && <p className="muted">إذا بقيت للعضو مهام حالية، استخدم زر نقل المهام في جدول الحسابات قبل أو بعد التعطيل.</p>}
         {!editing.active && <label className="field">سبب التعطيل<input className="input" value={editing.reason} onChange={(event) => setEditing({ ...editing, reason: event.target.value })} /></label>}
         <button className="button" disabled={saving}>{saving ? "جارٍ الحفظ" : "حفظ"}</button>
       </form>
     </Modal>}
+
+    {reassigning && <ReassignTasksModal
+      state={reassigning}
+      users={users}
+      saving={saving}
+      onChange={setReassigning}
+      onPreview={previewReassign}
+      onClose={() => setReassigning(null)}
+      onConfirm={() => {
+        const target = users.find((user) => user.id === reassigning.targetId);
+        setConfirm({
+          title: "تأكيد نقل المهام",
+          body: `سيتم نقل ${formatCount(reassigning.preview?.total_items ?? 0)} من ${reassigning.source.display_name} إلى ${target?.display_name ?? "العضو المستهدف"}.`,
+          confirmLabel: "نقل المهام",
+          onConfirm: executeReassign,
+        });
+      }}
+    />}
 
     {resetting && <Modal title="إعادة ضبط كلمة المرور" onClose={() => setResetting(null)}>
       <form className="stack" onSubmit={(event) => { event.preventDefault(); setConfirm({ title: "تأكيد إعادة الضبط", body: "ستظهر كلمة المرور الجديدة مرة واحدة فقط بعد نجاح العملية.", confirmLabel: "إعادة الضبط", onConfirm: savePasswordReset }); }}>
@@ -213,6 +299,90 @@ export function UsersManager({ initialUsers, initialError = "" }: { initialUsers
 
 function isResponse(value: unknown): value is ApiResponse { return typeof value === "object" && value !== null; }
 
+function ReassignTasksModal({
+  state,
+  users,
+  saving,
+  onChange,
+  onPreview,
+  onConfirm,
+  onClose,
+}: {
+  state: ReassignState;
+  users: AdminUser[];
+  saving: boolean;
+  onChange: (state: ReassignState) => void;
+  onPreview: () => Promise<void>;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const target = users.find((user) => user.id === state.targetId) ?? null;
+  const targetOptions = users.filter((user) => user.id !== state.source.id && user.active);
+  const sourceParts = operationalPartsForRoles(state.source.roles);
+  const compatibleParts = target ? compatibleOperationalParts(state.source.roles, target.roles) : [];
+  const unavailableParts = sourceParts.filter((part) => !compatibleParts.includes(part));
+  const reasonLength = state.reason.trim().length;
+  const canPreview = Boolean(target) && state.parts.length > 0;
+  const canExecute = canPreview && !state.previewDirty && Boolean(state.preview) && (state.preview?.total_items ?? 0) > 0 && reasonLength >= 5 && reasonLength <= 500;
+
+  function updateTarget(targetId: string) {
+    const nextTarget = users.find((user) => user.id === targetId) ?? null;
+    const nextCompatible = nextTarget ? compatibleOperationalParts(state.source.roles, nextTarget.roles) : [];
+    onChange({ ...state, targetId, parts: state.parts.filter((part) => nextCompatible.includes(part)), preview: null, previewDirty: true });
+  }
+
+  function togglePart(part: OperationalPart) {
+    const nextParts = state.parts.includes(part) ? state.parts.filter((item) => item !== part) : [...state.parts, part];
+    onChange({ ...state, parts: sourceParts.filter((item) => nextParts.includes(item)), preview: null, previewDirty: true });
+  }
+
+  return <Modal title="نقل المهام" onClose={onClose}>
+    <form className="stack" onSubmit={(event) => { event.preventDefault(); if (canExecute) onConfirm(); }}>
+      <div className="reassign-grid">
+        <div className="read-box"><span className="meta-label">العضو المصدر</span><strong>{state.source.display_name}</strong><span className="muted">{formatRoles(state.source.roles)}</span></div>
+        <label className="field">العضو المستهدف<select className="input" value={state.targetId} onChange={(event) => updateTarget(event.target.value)} required><option value="">اختر عضواً نشطاً</option>{targetOptions.map((user) => <option key={user.id} value={user.id}>{user.display_name}، {formatRoles(user.roles)}</option>)}</select></label>
+      </div>
+
+      <fieldset>
+        <legend>الأدوار المنقولة</legend>
+        {sourceParts.length === 0 && <p className="muted">لا يحمل العضو المصدر أدواراً تشغيلية قابلة للنقل.</p>}
+        {sourceParts.length > 0 && <div className="checks">{sourceParts.map((part) => {
+          const disabled = !compatibleParts.includes(part);
+          return <label key={part} className="toggle-row"><input type="checkbox" checked={state.parts.includes(part)} disabled={disabled || saving} onChange={() => togglePart(part)} /> <span>{operationalPartLabels[part]}</span></label>;
+        })}</div>}
+        {unavailableParts.length > 0 && <p className="muted">الأدوار غير المتاحة للمستهدف لن تُنقل: {unavailableParts.map((part) => operationalPartLabels[part]).join(" · ")}</p>}
+      </fieldset>
+
+      <div className="actions-row">
+        <button className="button button-secondary" type="button" disabled={saving || !canPreview} onClick={() => void onPreview()}>{saving ? "جارٍ المعاينة" : "معاينة"}</button>
+        {state.previewDirty && <span className="muted">المعاينة مطلوبة قبل التنفيذ.</span>}
+      </div>
+
+      {state.preview && <ReassignPreview preview={state.preview} />}
+
+      <label className="field">سبب النقل<textarea className="input textarea" minLength={5} maxLength={500} value={state.reason} onChange={(event) => onChange({ ...state, reason: event.target.value })} required /></label>
+      <p className="muted"><span className="num">{reasonLength.toLocaleString("en-US")}</span> / <span className="num">500</span></p>
+
+      <div className="actions-row">
+        <button className="button" type="submit" disabled={saving || !canExecute}>{saving ? "جارٍ التنفيذ" : "متابعة التنفيذ"}</button>
+        <button className="button button-secondary" type="button" disabled={saving} onClick={onClose}>إلغاء</button>
+      </div>
+    </form>
+  </Modal>;
+}
+
+function ReassignPreview({ preview }: { preview: ReassignTasksResult }) {
+  const rows = preview.summary ?? [];
+  return <div className="notice stack" role="status">
+    <strong>معاينة النقل</strong>
+    <div className="reassign-counts">
+      <span>المهام القابلة للنقل: <b className="num">{(preview.total_items ?? 0).toLocaleString("en-US")}</b></span>
+      <span>موجودة مسبقاً عند المستهدف: <b className="num">{(preview.duplicate_items ?? 0).toLocaleString("en-US")}</b></span>
+    </div>
+    {rows.length > 0 ? <table className="preview-table"><thead><tr><th>الدور</th><th>المرحلة</th><th>العدد</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.part}-${row.status}`}><td>{operationalPartLabels[row.part]}</td><td>{statusLabels[row.status]}</td><td className="num">{row.n_items.toLocaleString("en-US")}</td></tr>)}</tbody></table> : <p className="muted">لا توجد مهام حالية مطابقة للاختيار.</p>}
+  </div>;
+}
+
 function sortUsers(users: AdminUser[]) {
   return [...users].sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
 }
@@ -232,6 +402,10 @@ function formatDatePart(value: string) {
 
 function formatTimePart(value: string) {
   return new Date(value).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatCount(value: number) {
+  return `${value.toLocaleString("en-US")} ${value === 1 ? "مهمة" : "مهام"}`;
 }
 
 function RoleChecks({ selected, onChange, name }: { selected: Role[]; onChange?: (roles: Role[]) => void; name?: string }) {

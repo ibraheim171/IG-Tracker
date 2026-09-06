@@ -20,6 +20,7 @@ const roleLabels: Record<RoleName, string> = {
   writer: "كاتب",
   reviewer: "مراجع",
   producer: "منتج",
+  publisher: "مسؤول النشر",
   admin: "مدير",
 };
 

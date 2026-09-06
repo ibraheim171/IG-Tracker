@@ -18,7 +18,13 @@ type PartnerRecord = {
   partners: { name: string } | { name: string }[] | null;
 };
 
-type ApprovalRecord = Pick<Tables<"approvals">, "gate" | "result">;
+type ActorProfile = { display_name: string } | { display_name: string }[] | null;
+type ApprovalRecord = Pick<Tables<"approvals">, "id" | "gate" | "result" | "note" | "created_at" | "actor_id"> & {
+  profiles: ActorProfile;
+};
+type TransitionRecord = Pick<Tables<"transitions">, "id" | "from_status" | "to_status" | "note" | "override_reason" | "is_override" | "created_at" | "actor_id"> & {
+  profiles: ActorProfile;
+};
 type OpenSlot = Pick<Tables<"v_slot_board">, "slot_id" | "slot_at" | "state" | "n_items">;
 
 type DrawerDetails = {
@@ -26,6 +32,7 @@ type DrawerDetails = {
   participants: ParticipantRecord[];
   partners: PartnerRecord[];
   approvals: ApprovalRecord[];
+  transitions: TransitionRecord[];
   performance: PerformanceRow | null;
   openSlots: OpenSlot[];
   currentSlot: CurrentSlot | null;
@@ -60,18 +67,19 @@ export async function GET(request: NextRequest) {
   const { supabase } = auth;
 
   try {
-    const [itemResult, participantsResult, partnersResult, approvalsResult] = await Promise.all([
+    const [itemResult, participantsResult, partnersResult, approvalsResult, transitionsResult] = await Promise.all([
       supabase.from("items").select("*").eq("id", itemId).abortSignal(request.signal).single(),
       supabase.from("item_participants").select("user_id, part, profiles:profiles!item_participants_user_id_fkey(display_name)").eq("item_id", itemId).abortSignal(request.signal),
       supabase.from("item_partners").select("partner_id, partners(name)").eq("item_id", itemId).abortSignal(request.signal),
-      supabase.from("approvals").select("gate, result").eq("item_id", itemId).abortSignal(request.signal),
+      supabase.from("approvals").select("id, gate, result, note, created_at, actor_id, profiles:profiles!approvals_actor_id_fkey(display_name)").eq("item_id", itemId).order("created_at", { ascending: false }).abortSignal(request.signal),
+      supabase.from("transitions").select("id, from_status, to_status, note, override_reason, is_override, created_at, actor_id, profiles:profiles!transitions_actor_id_fkey(display_name)").eq("item_id", itemId).order("created_at", { ascending: false }).abortSignal(request.signal),
     ]);
 
     if (itemResult.error) {
       return jsonWithCookies(cookieResponse, { error: itemDetailsError("ITEM_DETAILS_ITEM") }, { status: itemResult.status === 406 ? 404 : itemResult.status });
     }
 
-    const relationError = participantsResult.error ?? partnersResult.error ?? approvalsResult.error;
+    const relationError = participantsResult.error ?? partnersResult.error ?? approvalsResult.error ?? transitionsResult.error;
     if (relationError) {
       return jsonWithCookies(cookieResponse, { error: itemDetailsError("ITEM_DETAILS_RELATION") }, { status: 500 });
     }
@@ -79,7 +87,7 @@ export async function GET(request: NextRequest) {
     const item = itemResult.data;
     const currentSlotId = item.slot_id;
     const shouldLoadPerformance = item.status === "published";
-    const shouldLoadOpenSlots = item.status !== "published" && !currentSlotId;
+    const shouldLoadOpenSlots = item.status !== "published";
 
     const [performanceResult, slotsResult, currentSlotResult] = await Promise.all([
       shouldLoadPerformance
@@ -101,7 +109,8 @@ export async function GET(request: NextRequest) {
       item,
       participants: (participantsResult.data ?? []) as unknown as ParticipantRecord[],
       partners: (partnersResult.data ?? []) as unknown as PartnerRecord[],
-      approvals: approvalsResult.data ?? [],
+      approvals: (approvalsResult.data ?? []) as unknown as ApprovalRecord[],
+      transitions: (transitionsResult.data ?? []) as unknown as TransitionRecord[],
       performance: performanceResult.error ? null : performanceResult.data,
       openSlots: slotsResult.error ? [] : slotsResult.data ?? [],
       currentSlot: currentSlotResult.error ? null : currentSlotResult.data,
