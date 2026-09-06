@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useReferenceData } from "@/components/reference-data-provider";
 import { canEditItemAssignments, type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
-import { restoreDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
+import { restoreCapturedDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
 import { executeInstagramPublish, isInstagramPermalink } from "@/lib/operational-ui";
 import { createClient } from "@/lib/supabase/client";
@@ -315,10 +315,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }, [confirmDialog]);
 
   useEffect(() => {
-    if (!itemId) {
-      drawerReturnFocusRef.current = null;
-      return;
-    }
+    if (!itemId) return;
     drawerReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   }, [itemId]);
 
@@ -624,6 +621,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   async function handleClose() {
     if (closeInFlightRef.current || actionInFlightRef.current || trackSaving) return;
     closeInFlightRef.current = true;
+    const returnFocusTarget = drawerReturnFocusRef.current;
     try {
       clearAutoSaveTimer();
       const hasPendingSave = Boolean(queuedSaveRef.current) || saveInFlightRef.current || Boolean(saveDrainPromiseRef.current);
@@ -638,8 +636,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
 
       onClose();
       window.setTimeout(() => {
-        restoreDialogFocus(drawerReturnFocusRef.current);
-        drawerReturnFocusRef.current = null;
+        restoreCapturedDialogFocus(returnFocusTarget, drawerReturnFocusRef);
       }, 0);
     } finally {
       closeInFlightRef.current = false;

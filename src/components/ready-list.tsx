@@ -8,6 +8,7 @@ import { fetchAdminTeamMembers } from "@/lib/admin-team-members";
 import { restoreDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
 import { isPublisherRole, safeHttpsHref } from "@/lib/item-permissions";
 import { createSingleFlight, isInstagramPermalink } from "@/lib/operational-ui";
+import { resetReadyPublishDialogState } from "@/lib/ready-publish-dialog";
 import { createClient } from "@/lib/supabase/client";
 import type { DrawerPreview, ReadyItem, RoleName } from "@/lib/ui-data";
 import { extractMessage, formatHebronDateTime, isAdminRole, parseRuleMessage } from "@/lib/ui-data";
@@ -94,6 +95,7 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers: ini
 
   function closePublishDialog() {
     if (isPublishing) return;
+    resetPublishDialogState();
     setPublishItem(null);
     window.setTimeout(() => {
       restoreDialogFocus(publishReturnFocusRef.current, readyHeadingRef.current);
@@ -103,7 +105,16 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers: ini
 
   function openPublishDialog(item: ReadyItem, trigger: HTMLElement) {
     publishReturnFocusRef.current = trigger;
+    resetPublishDialogState();
     setPublishItem(item);
+  }
+
+  function resetPublishDialogState() {
+    const state = resetReadyPublishDialogState();
+    setPermalink(state.permalink);
+    setMessage(state.message);
+    setOverrideReason(state.overrideReason);
+    setBlocked(state.blocked);
   }
 
   async function retryTeamMembers() {
@@ -133,10 +144,7 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers: ini
         }
         setItems((current) => current.filter((item) => item.id !== publishItem.id));
         setPublishItem(null);
-        setPermalink("");
-        setOverrideReason("");
-        setBlocked(false);
-        setMessage(null);
+        resetPublishDialogState();
         didPublish = true;
         router.refresh();
       } catch (error) {

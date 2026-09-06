@@ -38,3 +38,13 @@ export function restoreDialogFocus(target: HTMLElement | null, fallback: HTMLEle
   const focusTarget = target?.isConnected ? target : fallback?.isConnected ? fallback : null;
   focusTarget?.focus();
 }
+
+type FocusTarget = {
+  isConnected: boolean;
+  focus: () => void;
+};
+
+export function restoreCapturedDialogFocus<T extends FocusTarget>(capturedTarget: T | null, targetRef: { current: T | null }) {
+  if (capturedTarget?.isConnected) capturedTarget.focus();
+  if (targetRef.current === capturedTarget) targetRef.current = null;
+}
