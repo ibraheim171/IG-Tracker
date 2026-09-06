@@ -6,6 +6,215 @@
 -- and direct-write restriction unchanged.
 -- ============================================================================
 
+create schema if not exists extensions;
+revoke create on schema extensions from public, anon, authenticated;
+create extension if not exists pgcrypto with schema extensions;
+
+do $extension_guard$
+declare
+  extension_schema text;
+begin
+  select namespace.nspname
+    into extension_schema
+    from pg_catalog.pg_extension extension
+    join pg_catalog.pg_namespace namespace on namespace.oid = extension.extnamespace
+   where extension.extname = 'pgcrypto';
+
+  if extension_schema is distinct from 'extensions' then
+    raise exception 'PGCRYPTO_SCHEMA_MISMATCH: expected extensions, found %', coalesce(extension_schema, 'missing');
+  end if;
+  if pg_catalog.to_regprocedure('extensions.digest(bytea,text)') is null
+     or pg_catalog.to_regprocedure('extensions.gen_random_bytes(integer)') is null then
+    raise exception 'PGCRYPTO_FUNCTIONS_MISSING: digest(bytea,text) and gen_random_bytes(integer) are required';
+  end if;
+end
+$extension_guard$;
+
+create or replace function public.parse_instagram_permalink(p_permalink text)
+returns jsonb
+language plpgsql
+immutable
+strict
+parallel safe
+set search_path = pg_catalog
+as $$
+declare
+  permalink_match text[];
+  media_kind text;
+  shortcode text;
+begin
+  permalink_match := pg_catalog.regexp_match(
+    pg_catalog.btrim(p_permalink),
+    '^https?://(?:www\.)?instagram\.com/(p|reel|tv)/([A-Za-z0-9_-]+)/?(?:[?#][^[:space:]]*)?$',
+    'i'
+  );
+  if permalink_match is null then
+    return null;
+  end if;
+
+  media_kind := pg_catalog.lower(permalink_match[1]);
+  shortcode := permalink_match[2];
+  return pg_catalog.jsonb_build_object(
+    'media_kind', media_kind,
+    'shortcode', shortcode,
+    'permalink', 'https://www.instagram.com/' || media_kind || '/' || shortcode || '/'
+  );
+end
+$$;
+
+revoke execute on function public.parse_instagram_permalink(text) from public, anon, authenticated;
+
+create table public.historical_import_control (
+  singleton            boolean primary key default true check (singleton),
+  preview_token_hash   bytea,
+  preview_actor_id     uuid,
+  preview_payload_hash bytea,
+  preview_expires_at   timestamptz,
+  preview_used_at      timestamptz,
+  applied_at           timestamptz,
+  applied_batch_id     uuid unique,
+  applied_by           uuid,
+  source_sha256        text
+);
+
+alter table public.historical_import_control enable row level security;
+revoke all on table public.historical_import_control from public, anon, authenticated;
+insert into public.historical_import_control (singleton) values (true);
+
+do $identity_guard$
+declare
+  duplicate_shortcode text;
+begin
+  if pg_catalog.to_regclass('public.ux_items_shortcode') is null then
+    raise exception 'SHORTCODE_UNIQUE_INDEX_MISSING: public.ux_items_shortcode is required';
+  end if;
+
+  if not exists (
+    select 1
+      from pg_catalog.pg_index index_record
+      join pg_catalog.pg_class index_class on index_class.oid = index_record.indexrelid
+      join pg_catalog.pg_class table_class on table_class.oid = index_record.indrelid
+      join pg_catalog.pg_namespace table_namespace on table_namespace.oid = table_class.relnamespace
+      join pg_catalog.pg_attribute attribute
+        on attribute.attrelid = table_class.oid
+       and attribute.attnum = any(index_record.indkey)
+     where table_namespace.nspname = 'public'
+       and table_class.relname = 'items'
+       and index_class.relname = 'ux_items_shortcode'
+       and attribute.attname = 'ig_shortcode'
+       and index_record.indisunique
+       and index_record.indisvalid
+       and index_record.indnkeyatts = 1
+       and pg_catalog.pg_get_expr(index_record.indpred, index_record.indrelid) ~* 'ig_shortcode IS NOT NULL'
+  ) then
+    raise exception 'SHORTCODE_UNIQUE_INDEX_INVALID: expected a valid partial unique index on public.items(ig_shortcode)';
+  end if;
+
+  select candidate.shortcode
+    into duplicate_shortcode
+    from (
+      select coalesce(
+               item.ig_shortcode,
+               public.parse_instagram_permalink(item.ig_permalink) ->> 'shortcode'
+             ) as shortcode
+        from public.items item
+       where item.ig_permalink is not null
+    ) candidate
+   where candidate.shortcode is not null
+   group by candidate.shortcode
+  having count(*) > 1
+   limit 1;
+
+  if duplicate_shortcode is not null then
+    raise exception 'EXISTING_INSTAGRAM_DUPLICATE: shortcode % already identifies multiple items', duplicate_shortcode;
+  end if;
+end
+$identity_guard$;
+
+create or replace function public.mark_published(
+  p_item            uuid,
+  p_permalink       text,
+  p_at              timestamptz default pg_catalog.now(),
+  p_override_reason text default null
+) returns public.items
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  item_record public.items;
+  violations text[] := '{}';
+  is_override boolean := false;
+  parsed_permalink jsonb;
+  canonical_permalink text;
+  shortcode text;
+begin
+  perform public.assert_can_use_app();
+
+  if not public.can_publish_items() then
+    raise exception 'ROLE_REQUIRED: تعليم النشر يحتاج مسؤول النشر أو الأدمن';
+  end if;
+
+  select * into item_record from public.items where id = p_item for update;
+  if item_record.id is null then raise exception 'ITEM_NOT_FOUND'; end if;
+  if item_record.is_archived then raise exception 'ARCHIVED_IMMUTABLE'; end if;
+
+  parsed_permalink := public.parse_instagram_permalink(p_permalink);
+  if parsed_permalink is null then
+    raise exception 'RULE_VIOLATION: الرابط ليس رابط منشور إنستغرام صالحاً';
+  end if;
+  canonical_permalink := parsed_permalink ->> 'permalink';
+  shortcode := parsed_permalink ->> 'shortcode';
+
+  if exists (
+    select 1
+      from public.items existing
+     where existing.id <> p_item
+       and (
+         existing.ig_shortcode = shortcode
+         or (
+           existing.ig_shortcode is null
+           and public.parse_instagram_permalink(existing.ig_permalink) ->> 'shortcode' = shortcode
+         )
+       )
+  ) then
+    raise exception 'RULE_VIOLATION: هذا الرابط مربوط بمادة أخرى';
+  end if;
+
+  if item_record.status <> 'ready' then
+    violations := pg_catalog.array_append(violations, pg_catalog.format('المادة ليست جاهزة للنشر (%s)', item_record.status));
+  end if;
+
+  if pg_catalog.array_length(violations, 1) > 0 then
+    if public.is_admin() and coalesce(pg_catalog.btrim(p_override_reason), '') <> '' then
+      is_override := true;
+    else
+      raise exception 'RULE_VIOLATION: %', pg_catalog.array_to_string(violations, ' · ');
+    end if;
+  end if;
+
+  perform pg_catalog.set_config('app.rpc', 'on', true);
+
+  insert into public.transitions (item_id, from_status, to_status, actor_id,
+                                  is_override, override_reason, violations)
+  values (p_item, item_record.status, 'published', auth.uid(),
+          is_override, nullif(pg_catalog.btrim(coalesce(p_override_reason, '')), ''), nullif(violations, '{}'));
+
+  update public.items
+     set status = 'published',
+         published_at = p_at,
+         ig_permalink = canonical_permalink
+   where id = p_item
+   returning * into item_record;
+
+  perform public.refresh_slot_state(item_record.slot_id);
+  return item_record;
+end
+$$;
+
+revoke execute on function public.mark_published(uuid, text, timestamptz, text) from public, anon, authenticated;
+grant execute on function public.mark_published(uuid, text, timestamptz, text) to authenticated;
+
 create or replace function public.admin_import_historical_items(
   p_rows             jsonb,
   p_source_filename  text,
@@ -16,24 +225,27 @@ create or replace function public.admin_import_historical_items(
 ) returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog
 as $$
 declare
   actor_id             uuid := auth.uid();
   batch_id             uuid;
   source_filename      text := btrim(coalesce(p_source_filename, ''));
-  source_sha256        text := lower(btrim(coalesce(p_source_sha256, '')));
+  source_sha256_value  text := lower(btrim(coalesce(p_source_sha256, '')));
   reason               text := btrim(coalesce(p_reason, ''));
   dry_run              boolean := coalesce(p_dry_run, true);
-  expected_token       text;
+  payload_hash         bytea;
+  supplied_token_hash  bytea;
+  raw_preview_token    text;
+  preview_expiry       timestamptz;
+  control_record       public.historical_import_control%rowtype;
   row_value            jsonb;
   row_number           integer;
   title_value          text;
   permalink_value      text;
   canonical_permalink text;
-  permalink_match      text[];
+  parsed_permalink     jsonb;
   shortcode_value      text;
-  media_kind           text;
   published_text       text;
   published_value      timestamptz;
   track_name           text;
@@ -89,7 +301,7 @@ begin
     raise exception 'INVALID_SOURCE_FILENAME: اسم ملف المصدر غير صحيح';
   end if;
 
-  if source_sha256 !~ '^[0-9a-f]{64}$' then
+  if source_sha256_value !~ '^[0-9a-f]{64}$' then
     raise exception 'INVALID_SOURCE_SHA256: بصمة ملف المصدر غير صحيحة';
   end if;
 
@@ -97,16 +309,49 @@ begin
     raise exception 'REASON_REQUIRED: سبب الاستيراد يجب أن يكون بين 5 و500 محرف';
   end if;
 
-  expected_token := encode(
-    digest(convert_to(source_sha256 || E'\n' || p_rows::text, 'UTF8'), 'sha256'),
-    'hex'
+  payload_hash := extensions.digest(
+    pg_catalog.convert_to(source_filename || E'\n' || source_sha256_value || E'\n' || p_rows::text, 'UTF8'),
+    'sha256'
   );
 
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('ig-tracker:historical-import:v2', 0)
+  );
+  select * into control_record
+    from public.historical_import_control
+   where singleton
+   for update;
+  if control_record.singleton is null then
+    raise exception 'IMPORT_CONTROL_MISSING: historical import control row is missing';
+  end if;
+  if control_record.applied_at is not null then
+    raise exception 'IMPORT_CLOSED: تم تطبيق دفعة الاستيراد التاريخي مسبقاً وأُغلقت الأداة';
+  end if;
+
   if not dry_run then
-    if coalesce(btrim(p_preview_token), '') <> expected_token then
-      raise exception 'PREVIEW_REQUIRED: يجب اعتماد معاينة مطابقة قبل الاستيراد';
+    if coalesce(pg_catalog.btrim(p_preview_token), '') !~ '^[0-9a-f]{64}$' then
+      raise exception 'PREVIEW_REQUIRED: يجب إجراء معاينة صالحة قبل الاستيراد';
     end if;
-    perform pg_advisory_xact_lock(hashtextextended('ig-tracker:historical-import:v1', 0));
+    supplied_token_hash := extensions.digest(
+      pg_catalog.convert_to(pg_catalog.lower(pg_catalog.btrim(p_preview_token)), 'UTF8'),
+      'sha256'
+    );
+    if control_record.preview_token_hash is distinct from supplied_token_hash then
+      raise exception 'PREVIEW_REQUIRED: رمز المعاينة غير صالح';
+    end if;
+    if control_record.preview_actor_id is distinct from actor_id then
+      raise exception 'PREVIEW_ACTOR_MISMATCH: رمز المعاينة مرتبط بأدمن آخر';
+    end if;
+    if control_record.preview_payload_hash is distinct from payload_hash then
+      raise exception 'PREVIEW_INPUT_MISMATCH: محتوى الاستيراد لا يطابق المعاينة';
+    end if;
+    if control_record.preview_used_at is not null then
+      raise exception 'PREVIEW_ALREADY_USED: رمز المعاينة استُخدم مسبقاً';
+    end if;
+    if control_record.preview_expires_at is null
+       or control_record.preview_expires_at <= pg_catalog.clock_timestamp() then
+      raise exception 'PREVIEW_EXPIRED: انتهت صلاحية المعاينة';
+    end if;
   end if;
 
   for row_value in select value from jsonb_array_elements(p_rows)
@@ -116,8 +361,8 @@ begin
     title_value := null;
     permalink_value := null;
     canonical_permalink := null;
+    parsed_permalink := null;
     shortcode_value := null;
-    media_kind := null;
     published_text := null;
     published_value := null;
     track_name := null;
@@ -170,26 +415,24 @@ begin
         row_errors := array_append(row_errors, 'رابط إنستغرام مطلوب');
       else
         permalink_value := btrim(row_value ->> 'permalink');
-        permalink_match := regexp_match(
-          permalink_value,
-          '^https://(?:www\.)?instagram\.com/(p|reel|tv)/([A-Za-z0-9_-]+)/?(?:[?#][^[:space:]]*)?$',
-          'i'
-        );
-        if permalink_match is null then
-          row_errors := array_append(row_errors, 'يجب أن يكون الرابط HTTPS من نوع p أو reel أو tv');
+        parsed_permalink := public.parse_instagram_permalink(permalink_value);
+        if parsed_permalink is null then
+          row_errors := array_append(row_errors, 'يجب أن يكون الرابط من instagram.com ومن نوع p أو reel أو tv دون مسار إضافي');
         else
-          media_kind := lower(permalink_match[1]);
-          shortcode_value := permalink_match[2];
-          canonical_permalink := 'https://www.instagram.com/' || media_kind || '/' || shortcode_value || '/';
+          shortcode_value := parsed_permalink ->> 'shortcode';
+          canonical_permalink := parsed_permalink ->> 'permalink';
           if shortcode_value = any(seen_shortcodes) then
             row_errors := array_append(row_errors, 'رابط إنستغرام مكرر داخل الملف');
           else
             seen_shortcodes := array_append(seen_shortcodes, shortcode_value);
           end if;
           if exists (
-            select 1 from public.items
-             where ig_shortcode = shortcode_value
-                or ig_permalink = canonical_permalink
+            select 1 from public.items existing
+             where existing.ig_shortcode = shortcode_value
+                or (
+                  existing.ig_shortcode is null
+                  and public.parse_instagram_permalink(existing.ig_permalink) ->> 'shortcode' = shortcode_value
+                )
           ) then
             row_errors := array_append(row_errors, 'رابط إنستغرام موجود في المنصة');
           end if;
@@ -338,12 +581,26 @@ begin
    );
 
   if dry_run then
+    raw_preview_token := pg_catalog.encode(extensions.gen_random_bytes(32), 'hex');
+    preview_expiry := pg_catalog.clock_timestamp() + interval '15 minutes';
+    update public.historical_import_control
+       set preview_token_hash = extensions.digest(
+             pg_catalog.convert_to(raw_preview_token, 'UTF8'),
+             'sha256'
+           ),
+           preview_actor_id = actor_id,
+           preview_payload_hash = payload_hash,
+           preview_expires_at = preview_expiry,
+           preview_used_at = null
+     where singleton;
+
     return jsonb_build_object(
       'ok', invalid_rows = 0,
       'dry_run', true,
-      'preview_token', expected_token,
+      'preview_token', raw_preview_token,
+      'preview_expires_at', preview_expiry,
       'source_filename', source_filename,
-      'source_sha256', source_sha256,
+      'source_sha256', source_sha256_value,
       'total_rows', total_rows,
       'valid_rows', valid_rows,
       'invalid_rows', invalid_rows,
@@ -357,7 +614,11 @@ begin
     raise exception 'VALIDATION_FAILED: لا يمكن تطبيق ملف يحتوي على صفوف غير صالحة';
   end if;
 
-  batch_id := gen_random_uuid();
+  update public.historical_import_control
+     set preview_used_at = pg_catalog.clock_timestamp()
+   where singleton;
+
+  batch_id := pg_catalog.gen_random_uuid();
 
   for normalized_row in select value from jsonb_array_elements(normalized_rows)
   loop
@@ -433,7 +694,7 @@ begin
       jsonb_build_object(
         'kind', 'historical_csv_import',
         'batch_id', batch_id,
-        'source_sha256', source_sha256,
+        'source_sha256', source_sha256_value,
         'csv_line', (normalized_row ->> 'csv_line')::integer
       )::text
     );
@@ -448,12 +709,19 @@ begin
     slot_value := null;
   end loop;
 
+  update public.historical_import_control
+     set applied_at = pg_catalog.clock_timestamp(),
+         applied_batch_id = batch_id,
+         applied_by = actor_id,
+         source_sha256 = source_sha256_value
+   where singleton;
+
   return jsonb_build_object(
     'ok', true,
     'dry_run', false,
     'batch_id', batch_id,
     'source_filename', source_filename,
-    'source_sha256', source_sha256,
+    'source_sha256', source_sha256_value,
     'inserted_items', inserted_items,
     'created_slots', created_slots,
     'reused_slots', reused_slots,

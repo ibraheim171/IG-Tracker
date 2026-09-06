@@ -39,6 +39,7 @@ export type HistoricalImportPreview = {
   ok: boolean;
   dry_run: true;
   preview_token: string;
+  preview_expires_at: string;
   source_filename: string;
   source_sha256: string;
   total_rows: number;
@@ -71,6 +72,15 @@ function parseCsvRecords(input: string): string[][] {
   let record: string[] = [];
   let field = "";
   let quoted = false;
+  let afterClosingQuote = false;
+
+  function finishRecord() {
+    record.push(field);
+    records.push(record);
+    record = [];
+    field = "";
+    afterClosingQuote = false;
+  }
 
   for (let index = 0; index < input.length; index += 1) {
     const character = input[index];
@@ -80,8 +90,25 @@ function parseCsvRecords(input: string): string[][] {
         index += 1;
       } else if (character === '"') {
         quoted = false;
+        afterClosingQuote = true;
       } else {
         field += character;
+      }
+      continue;
+    }
+
+    if (afterClosingQuote) {
+      if (character === ",") {
+        record.push(field);
+        field = "";
+        afterClosingQuote = false;
+      } else if (character === "\n") {
+        finishRecord();
+      } else if (character === "\r") {
+        finishRecord();
+        if (input[index + 1] === "\n") index += 1;
+      } else {
+        throw new Error("INVALID_QUOTE_SUFFIX");
       }
       continue;
     }
@@ -93,11 +120,11 @@ function parseCsvRecords(input: string): string[][] {
       record.push(field);
       field = "";
     } else if (character === "\n") {
-      record.push(field);
-      records.push(record);
-      record = [];
-      field = "";
-    } else if (character !== "\r") {
+      finishRecord();
+    } else if (character === "\r") {
+      finishRecord();
+      if (input[index + 1] === "\n") index += 1;
+    } else {
       field += character;
     }
   }
@@ -178,7 +205,8 @@ export function safeHistoricalImportError(message: string | undefined) {
   const markers = [
     "ROLE_REQUIRED:", "INVALID_PAYLOAD:", "ROW_LIMIT:", "PAYLOAD_TOO_LARGE:",
     "INVALID_SOURCE_FILENAME:", "INVALID_SOURCE_SHA256:", "REASON_REQUIRED:",
-    "PREVIEW_REQUIRED:", "VALIDATION_FAILED:",
+    "PREVIEW_REQUIRED:", "PREVIEW_ACTOR_MISMATCH:", "PREVIEW_INPUT_MISMATCH:",
+    "PREVIEW_ALREADY_USED:", "PREVIEW_EXPIRED:", "IMPORT_CLOSED:", "VALIDATION_FAILED:",
   ];
   for (const marker of markers) {
     const index = message.indexOf(marker);

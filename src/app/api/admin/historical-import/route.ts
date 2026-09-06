@@ -9,6 +9,11 @@ import {
   safeHistoricalImportError,
 } from "@/lib/admin-historical-import";
 import { requireActiveRouteProfile } from "@/lib/route-auth";
+import {
+  declaredBodyExceedsLimit,
+  readUtf8RequestBodyWithLimit,
+  RequestBodyTooLargeError,
+} from "@/lib/read-limited-request-body";
 
 type ImportAction = "preview" | "apply";
 type ImportRequestBody = {
@@ -67,9 +72,7 @@ function checksumsMatch(provided: string, calculated: string) {
 
 export async function POST(request: NextRequest) {
   const cookieResponse = NextResponse.next();
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-
-  if (Number.isFinite(contentLength) && contentLength > HISTORICAL_IMPORT_MAX_BYTES) {
+  if (declaredBodyExceedsLimit(request.headers.get("content-length"), HISTORICAL_IMPORT_MAX_BYTES)) {
     return responseWithCookies(cookieResponse, { error: "حجم الطلب يتجاوز 2 MiB.", code: "E_PAYLOAD_TOO_LARGE" }, 413);
   }
   if (!isSameOriginMutation(request)) {
@@ -82,9 +85,17 @@ export async function POST(request: NextRequest) {
     return responseWithCookies(cookieResponse, { error: "الاستيراد التاريخي متاح للأدمن فقط.", code: "E_FORBIDDEN" }, 403);
   }
 
-  const rawBody = await request.text();
-  if (Buffer.byteLength(rawBody, "utf8") > HISTORICAL_IMPORT_MAX_BYTES) {
-    return responseWithCookies(cookieResponse, { error: "حجم الطلب يتجاوز 2 MiB.", code: "E_PAYLOAD_TOO_LARGE" }, 413);
+  let rawBody: string;
+  try {
+    rawBody = await readUtf8RequestBodyWithLimit(request, HISTORICAL_IMPORT_MAX_BYTES);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return responseWithCookies(cookieResponse, { error: "حجم الطلب يتجاوز 2 MiB.", code: "E_PAYLOAD_TOO_LARGE" }, 413);
+    }
+    return responseWithCookies(cookieResponse, {
+      error: "تعذر قراءة طلب الاستيراد. رمز التشخيص: HISTORICAL_IMPORT_BODY.",
+      code: "E_SERVER",
+    }, 500);
   }
 
   let body: ImportRequestBody;

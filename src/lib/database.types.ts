@@ -696,6 +696,45 @@ export type Database = {
           },
         ]
       }
+      historical_import_control: {
+        Row: {
+          applied_at: string | null
+          applied_batch_id: string | null
+          applied_by: string | null
+          preview_actor_id: string | null
+          preview_expires_at: string | null
+          preview_payload_hash: string | null
+          preview_token_hash: string | null
+          preview_used_at: string | null
+          singleton: boolean
+          source_sha256: string | null
+        }
+        Insert: {
+          applied_at?: string | null
+          applied_batch_id?: string | null
+          applied_by?: string | null
+          preview_actor_id?: string | null
+          preview_expires_at?: string | null
+          preview_payload_hash?: string | null
+          preview_token_hash?: string | null
+          preview_used_at?: string | null
+          singleton?: boolean
+          source_sha256?: string | null
+        }
+        Update: {
+          applied_at?: string | null
+          applied_batch_id?: string | null
+          applied_by?: string | null
+          preview_actor_id?: string | null
+          preview_expires_at?: string | null
+          preview_payload_hash?: string | null
+          preview_token_hash?: string | null
+          preview_used_at?: string | null
+          singleton?: boolean
+          source_sha256?: string | null
+        }
+        Relationships: []
+      }
       items: {
         Row: {
           caption: string | null
@@ -1509,6 +1548,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      parse_instagram_permalink: {
+        Args: { p_permalink: string }
+        Returns: Json
       }
       admin_reassign_tasks: {
         Args: {
