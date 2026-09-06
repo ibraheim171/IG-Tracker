@@ -5,11 +5,11 @@ import type { WaitingItem } from "@/lib/ui-data";
 
 export default async function WaitingPage() {
   const [profile, supabase] = await Promise.all([getCurrentProfile(), createClient()]);
-  const { data: waitingRows } = await supabase
+  const { data: waitingRows, error } = await supabase
     .from("v_waiting")
     .select("id, ref, title, status, track_id, track_name, slot_at, waiting_on, people")
     .order("waiting_on", { ascending: true })
     .order("slot_at", { ascending: true });
   const items: WaitingItem[] = ((waitingRows ?? []) as Omit<WaitingItem, "track_color">[]).map((item) => ({ ...item, track_color: null }));
-  return <WaitingBoard items={items} currentUserId={profile.id} roles={profile.roles} />;
+  return <WaitingBoard items={items} currentUserId={profile.id} roles={profile.roles} loadError={error ? "تعذر تحميل قائمة الانتظار. حاول مجددًا. رمز التشخيص: WAITING_LOAD." : null} />;
 }

@@ -11,7 +11,9 @@
     "test:restrict-writer-item-fields": "node --test src/lib/restrict-writer-item-fields.test.ts",
     "test:admin-reassign-tasks": "node --test src/lib/admin-reassign-tasks.test.ts",
     "test:admin-create-item": "node --test src/lib/admin-create-item.test.ts",
-    "test:workflow-ui": "node --test src/lib/workflow-ui.test.ts"
+    "test:workflow-ui": "node --test src/lib/workflow-ui.test.ts",
+    "test:operational-ui": "node --test src/lib/operational-ui.test.ts",
+    "test": "pnpm run test:admin-users && pnpm run test:item-permissions && pnpm run test:restrict-writer-item-fields && pnpm run test:admin-reassign-tasks && pnpm run test:admin-create-item && pnpm run test:workflow-ui && pnpm run test:operational-ui"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

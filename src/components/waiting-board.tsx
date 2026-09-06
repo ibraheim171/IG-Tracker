@@ -11,13 +11,14 @@ type Props = {
   items: WaitingItem[];
   currentUserId: string;
   roles: RoleName[];
+  loadError?: string | null;
 };
 
 function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function WaitingBoard({ items, currentUserId, roles }: Props) {
+export function WaitingBoard({ items, currentUserId, roles, loadError = null }: Props) {
   const { tracks } = useReferenceData();
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -49,7 +50,12 @@ export function WaitingBoard({ items, currentUserId, roles }: Props) {
         </div>
       </header>
 
-      {groups.length ? groups.map(([waitingOn, groupItems]) => (
+      {loadError ? (
+        <section className="card stack" role="alert">
+          <p>{loadError}</p>
+          <button className="button button-secondary" type="button" onClick={() => router.refresh()}>إعادة المحاولة</button>
+        </section>
+      ) : groups.length ? groups.map(([waitingOn, groupItems]) => (
         <section className="date-group" key={waitingOn}>
           <header className="date-head">
             <h2>{waitingOn}</h2>

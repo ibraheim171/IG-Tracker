@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState, useTransition, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useRouter } from "next/navigation";
 import { ItemDrawer } from "@/components/item-drawer";
 import type { TeamMemberOption } from "@/lib/admin-create-item";
 import { isPublisherRole, safeHttpsHref } from "@/lib/item-permissions";
+import { createSingleFlight, isInstagramPermalink } from "@/lib/operational-ui";
 import { createClient } from "@/lib/supabase/client";
 import type { DrawerPreview, ReadyItem, RoleName } from "@/lib/ui-data";
 import { extractMessage, formatHebronDateTime, isAdminRole, parseRuleMessage } from "@/lib/ui-data";
@@ -13,6 +15,7 @@ type Props = {
   currentUserId: string;
   roles: RoleName[];
   teamMembers?: TeamMemberOption[];
+  loadError?: string | null;
 };
 
 function trackStyle(color: string | null) {
@@ -36,8 +39,11 @@ function previewFromReady(item: ReadyItem): DrawerPreview {
   };
 }
 
-export function ReadyList({ initialItems, currentUserId, roles, teamMembers = [] }: Props) {
+export function ReadyList({ initialItems, currentUserId, roles, teamMembers = [], loadError = null }: Props) {
   const supabase = createClient();
+  const router = useRouter();
+  const publishFlight = useRef(createSingleFlight());
+  const publishDialogRef = useRef<HTMLFormElement | null>(null);
   const [items, setItems] = useState(initialItems);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [publishItem, setPublishItem] = useState<ReadyItem | null>(null);
@@ -45,33 +51,62 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
   const [message, setMessage] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [blocked, setBlocked] = useState(false);
-  const [isPending, startTransition] = useTransition();
+  const [isPublishing, setIsPublishing] = useState(false);
   const isAdmin = isAdminRole(roles);
   const canPublish = isPublisherRole(roles);
-  const linkLooksValid = /^https:\/\/www\.instagram\.com\/(p|reel|tv)\/[^/?#]+/.test(permalink.trim());
+  const linkLooksValid = isInstagramPermalink(permalink);
   const openItem = useMemo(() => {
     const item = items.find((candidate) => candidate.id === openItemId);
     return item ? previewFromReady(item) : null;
   }, [items, openItemId]);
 
+  useEffect(() => {
+    setItems(initialItems);
+  }, [initialItems]);
+
+  useEffect(() => {
+    if (!publishItem) return;
+
+    publishDialogRef.current?.focus();
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !isPublishing) {
+        event.preventDefault();
+        setPublishItem(null);
+      }
+    }
+    document.addEventListener("keydown", handleKeydown);
+    return () => document.removeEventListener("keydown", handleKeydown);
+  }, [isPublishing, publishItem]);
+
   async function publish(override: string | null = null) {
     if (!publishItem || !linkLooksValid) return;
-    const { error } = await supabase.rpc("mark_published", {
-      p_item: publishItem.id,
-      p_permalink: permalink.trim(),
-      p_override_reason: override ?? undefined,
+    await publishFlight.current(async () => {
+      setIsPublishing(true);
+      try {
+        const { error } = await supabase.rpc("mark_published", {
+          p_item: publishItem.id,
+          p_permalink: permalink.trim(),
+          p_override_reason: override ?? undefined,
+        });
+        if (error) {
+          setBlocked(true);
+          setMessage(parseRuleMessage(extractMessage(error)));
+          return;
+        }
+        setItems((current) => current.filter((item) => item.id !== publishItem.id));
+        setPublishItem(null);
+        setPermalink("");
+        setOverrideReason("");
+        setBlocked(false);
+        setMessage(null);
+        router.refresh();
+      } catch (error) {
+        setBlocked(true);
+        setMessage(parseRuleMessage(extractMessage(error)));
+      } finally {
+        setIsPublishing(false);
+      }
     });
-    if (error) {
-      setBlocked(true);
-      setMessage(parseRuleMessage(extractMessage(error)));
-      return;
-    }
-    setItems((current) => current.filter((item) => item.id !== publishItem.id));
-    setPublishItem(null);
-    setPermalink("");
-    setOverrideReason("");
-    setBlocked(false);
-    setMessage(null);
   }
 
   return (
@@ -83,7 +118,12 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
         </div>
       </header>
 
-      {items.length ? (
+      {loadError ? (
+        <section className="card stack" role="alert">
+          <p>{loadError}</p>
+          <button className="button button-secondary" type="button" onClick={() => router.refresh()}>إعادة المحاولة</button>
+        </section>
+      ) : items.length ? (
         <div className="ready-list">
           {items.map((item) => (
             <article className="ready-card" key={item.id} style={trackStyle(item.color_hex)}>
@@ -108,23 +148,24 @@ export function ReadyList({ initialItems, currentUserId, roles, teamMembers = []
       ) : <section className="card"><p>لا توجد مواد جاهزة للنشر.</p></section>}
 
       {canPublish && publishItem ? (
-        <div className="veil" onClick={() => setPublishItem(null)}>
-          <form className="confirm-panel stack" onSubmit={(event) => { event.preventDefault(); startTransition(() => { void publish(); }); }} onClick={(event) => event.stopPropagation()}>
-            <h2>تأكيد النشر</h2>
-            {message ? <p className="notice">{message}</p> : null}
-            <label className="field">رابط إنستغرام<input className="input" value={permalink} onChange={(event) => setPermalink(event.target.value)} placeholder="https://www.instagram.com/p/..." /></label>
-            <button className="button" type="submit" disabled={!linkLooksValid || isPending}>حفظ النشر</button>
+        <div className="veil" onClick={() => { if (!isPublishing) setPublishItem(null); }}>
+          <form aria-labelledby="ready-publish-title" aria-modal="true" className="confirm-panel stack" onSubmit={(event) => { event.preventDefault(); void publish(); }} onClick={(event) => event.stopPropagation()} ref={publishDialogRef} role="dialog" tabIndex={-1}>
+            <h2 id="ready-publish-title">تأكيد النشر</h2>
+            {message ? <p className="notice" role="alert">{message}</p> : null}
+            <label className="field">رابط إنستغرام<input className="input" disabled={isPublishing} inputMode="url" value={permalink} onChange={(event) => setPermalink(event.target.value)} placeholder="https://www.instagram.com/p/..." /></label>
+            <button className="button" type="submit" disabled={!linkLooksValid || isPublishing}>{isPublishing ? "جارٍ حفظ النشر..." : "حفظ النشر"}</button>
             {blocked && isAdmin ? (
               <div className="override-box">
-                <label className="field">سبب التجاوز<input className="input" value={overrideReason} onChange={(event) => setOverrideReason(event.target.value)} /></label>
-                <button className="button" type="button" disabled={!overrideReason.trim() || isPending} onClick={() => startTransition(() => { void publish(overrideReason.trim()); })}>تجاوز ونفّذ</button>
+                <label className="field">سبب التجاوز<input className="input" disabled={isPublishing} value={overrideReason} onChange={(event) => setOverrideReason(event.target.value)} /></label>
+                <button className="button" type="button" disabled={!overrideReason.trim() || isPublishing} onClick={() => { void publish(overrideReason.trim()); }}>{isPublishing ? "جارٍ حفظ النشر..." : "تجاوز ونفّذ"}</button>
               </div>
             ) : null}
+            <button className="button button-secondary" type="button" disabled={isPublishing} onClick={() => setPublishItem(null)}>إلغاء</button>
           </form>
         </div>
       ) : null}
 
-      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} />
     </main>
   );
 }

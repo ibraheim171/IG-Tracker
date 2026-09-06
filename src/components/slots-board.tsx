@@ -16,13 +16,14 @@ type Props = {
   currentUserId: string;
   roles: RoleName[];
   teamMembers: TeamMemberOption[];
+  loadError?: string | null;
 };
 
 function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: Props) {
+export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers, loadError = null }: Props) {
   const { tracks, ideaTypes } = useReferenceData();
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -70,7 +71,14 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
         {isAdmin ? <button className="button" type="button" onClick={() => setCreateOpen(true)}>إضافة مادة</button> : null}
       </header>
       {createMessage ? <p className="notice" role="status">{createMessage}</p> : null}
-      <div className="slot-days">
+      {loadError ? (
+        <section className="card stack" role="alert">
+          <p>{loadError}</p>
+          <button className="button button-secondary" type="button" onClick={() => router.refresh()}>إعادة المحاولة</button>
+        </section>
+      ) : dateKeys.length === 0 ? (
+        <section className="card"><p>لا توجد مواعيد نشر قادمة.</p></section>
+      ) : <div className="slot-days">
         {dateKeys.map((dateKey) => {
           const firstSlot = groups.find((group) => group.dateKey === dateKey)?.slot;
           if (!firstSlot?.slot_at) return null;
@@ -112,7 +120,7 @@ export function SlotsBoard({ slots, items, currentUserId, roles, teamMembers }: 
             </section>
           );
         })}
-      </div>
+      </div>}
       <AdminCreateItemModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}

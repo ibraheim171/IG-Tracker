@@ -28,12 +28,18 @@ export default async function HomePage() {
   const [profile, supabase] = await Promise.all([getCurrentProfile(), createClient()]);
   const isAdmin = profile.roles.includes("admin");
   const since = new Date(Date.now() - 4 * 86_400_000).toISOString();
-  const [{ data: slotsData }, { data: waitingRows }, { data: itemRows }, adminUsers] = await Promise.all([
+  const [slotsResult, waitingResult, itemsResult, adminUsers] = await Promise.all([
     supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items, n_ready").gte("slot_at", since).order("slot_at", { ascending: true }),
     supabase.from("v_waiting").select("id, waiting_on"),
     supabase.from("items").select("id, ref, title, status, slot_id, track_id, idea_type_id, item_participants(part, profiles:profiles!item_participants_user_id_fkey(display_name))").not("slot_id", "is", null),
     isAdmin ? listAdminUsers().catch(() => []) : Promise.resolve([]),
   ]);
+  const loadError = slotsResult.error || waitingResult.error || itemsResult.error
+    ? "تعذر تحميل خطة النشر. حاول مجددًا. رمز التشخيص: SLOTS_LOAD."
+    : null;
+  const slotsData = slotsResult.data;
+  const waitingRows = waitingResult.data;
+  const itemRows = itemsResult.data;
   const slots = (slotsData ?? []) as BoardSlot[];
   const slotIds = new Set(slots.map((slot) => slot.slot_id).filter((id): id is string => Boolean(id)));
   const rawItems = ((itemRows ?? []) as ItemWithLookups[]).filter((item) => item.slot_id && slotIds.has(item.slot_id));
@@ -64,5 +70,5 @@ export default async function HomePage() {
       roles: user.roles,
     }));
 
-  return <SlotsBoard slots={slots} items={items} currentUserId={profile.id} roles={profile.roles} teamMembers={teamMembers} />;
+  return <SlotsBoard slots={slots} items={items} currentUserId={profile.id} roles={profile.roles} teamMembers={teamMembers} loadError={loadError} />;
 }

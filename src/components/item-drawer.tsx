@@ -213,6 +213,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const needsListRefreshRef = useRef(false);
   const actionInFlightRef = useRef(false);
   const confirmDialogRef = useRef<HTMLElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
   const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
   const confirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
@@ -305,6 +306,21 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       document.removeEventListener("keydown", handleConfirmKeydown);
     };
   }, [confirmDialog]);
+
+  useEffect(() => {
+    if (!itemId || confirmDialog) return;
+
+    drawerRef.current?.focus();
+    function handleDrawerKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !actionInFlightRef.current && !trackSaving) {
+        event.preventDefault();
+        void handleClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleDrawerKeydown);
+    return () => document.removeEventListener("keydown", handleDrawerKeydown);
+  }, [confirmDialog, itemId, trackSaving]);
 
   useEffect(() => {
     const sequence = ++loadSequence.current;
@@ -590,7 +606,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   async function handleClose() {
-    if (closeInFlightRef.current) return;
+    if (closeInFlightRef.current || actionInFlightRef.current || trackSaving) return;
     closeInFlightRef.current = true;
     try {
       clearAutoSaveTimer();
@@ -820,8 +836,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
 
   return (
     <div className="veil" onClick={handleClose}>
-      <aside className="drawer" onClick={(event) => event.stopPropagation()} aria-label="بطاقة المادة">
-        <button className="icon-button drawer-close" type="button" onClick={handleClose} aria-label="إغلاق">×</button>
+      <aside aria-labelledby="item-drawer-title" aria-modal="true" aria-busy={actionDisabled || undefined} className="drawer" onClick={(event) => event.stopPropagation()} ref={drawerRef} role="dialog" tabIndex={-1}>
+        <button className="icon-button drawer-close" type="button" disabled={actionDisabled || trackSaving} onClick={handleClose} aria-label="إغلاق">×</button>
         {!displayItem ? (
           <div className="drawer-stack">
             {showDetailsLoading ? <p>جارٍ التحميل...</p> : null}
@@ -831,7 +847,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
           <div className="drawer-stack">
             <header className="drawer-head">
               <span className="num ref-pill">{displayItem.ref}</span>
-              <h2>{displayItem.title}</h2>
+              <h2 id="item-drawer-title">{displayItem.title}</h2>
               <div className="pill-row">
                 <span className="pill status-pill">{workflowLabel(displayItem.status)}</span>
                 {trackName ? <span className="pill track-pill" style={trackStyle(trackColor)}>{trackName}</span> : null}
@@ -844,7 +860,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               </div>
             </header>
 
-            {message && !(isAdmin && failedAdvance) ? <p className="notice">{message}</p> : null}
+            {message && !(isAdmin && failedAdvance) ? <p className="notice" role="status">{message}</p> : null}
+            {actionBusy ? <p className="muted" role="status">جارٍ تنفيذ الإجراء...</p> : null}
             {showDetailsLoading ? <p className="muted">جارٍ تحميل التفاصيل والإجراءات...</p> : null}
             {loadError ? <div className="notice stack" role="alert"><p>{loadError}</p>{retryButton}</div> : null}
 

@@ -14,13 +14,14 @@ type Props = {
   eyebrow?: string;
   beforeLists?: ReactNode;
   showMaterialSections?: boolean;
+  loadError?: string | null;
 };
 
 function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function MyMaterials({ materials, currentUserId, roles, title = "موادي", eyebrow = "شخصي", beforeLists, showMaterialSections = true }: Props) {
+export function MyMaterials({ materials, currentUserId, roles, title = "موادي", eyebrow = "شخصي", beforeLists, showMaterialSections = true, loadError = null }: Props) {
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const isUnsubmittedWriterItem = (material: MyMaterial) => material.parts.includes("writer") && material.item.status === "idea";
@@ -37,7 +38,12 @@ export function MyMaterials({ materials, currentUserId, roles, title = "مواد
         </div>
       </header>
 
-      {beforeLists}
+      {loadError ? (
+        <section className="card stack" role="alert">
+          <p>{loadError}</p>
+          <button className="button button-secondary" type="button" onClick={() => router.refresh()}>إعادة المحاولة</button>
+        </section>
+      ) : beforeLists}
 
       {showMaterialSections ? (
         <>
