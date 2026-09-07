@@ -2,6 +2,7 @@
 
 import { MyMaterials } from "@/components/my-materials";
 import { TeamMemberPicker, type TeamMemberOption } from "@/components/team-member-picker";
+import type { TeamMemberOption as AssignmentTeamMemberOption } from "@/lib/admin-create-item";
 import type { MyMaterial, RoleName } from "@/lib/ui-data";
 
 type Props = {
@@ -12,9 +13,21 @@ type Props = {
   materials: MyMaterial[];
   currentUserId: string;
   roles: RoleName[];
+  assignmentTeamMembers: AssignmentTeamMemberOption[];
+  assignmentTeamMembersLoadError: string | null;
 };
 
-export function TeamView({ members, selectedMember, invalidMessage, materialsError, materials, currentUserId, roles }: Props) {
+export function TeamView({
+  members,
+  selectedMember,
+  invalidMessage,
+  materialsError,
+  materials,
+  currentUserId,
+  roles,
+  assignmentTeamMembers,
+  assignmentTeamMembersLoadError,
+}: Props) {
   return (
     <MyMaterials
       title="عرض مهام الفريق"
@@ -22,6 +35,8 @@ export function TeamView({ members, selectedMember, invalidMessage, materialsErr
       materials={materials}
       currentUserId={currentUserId}
       roles={roles}
+      teamMembers={assignmentTeamMembers}
+      teamMembersLoadError={assignmentTeamMembersLoadError}
       showMaterialSections={Boolean(selectedMember) && !materialsError}
       beforeLists={(
         <div className="team-view-stack">

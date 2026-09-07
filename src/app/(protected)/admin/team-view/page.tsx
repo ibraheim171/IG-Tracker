@@ -1,9 +1,11 @@
 import { TeamView } from "@/components/team-view";
+import type { TeamMemberOption } from "@/components/team-member-picker";
+import { activeTeamMemberOptions, teamMembersLoadError } from "@/lib/admin-team-members";
+import { listAdminUsers } from "@/lib/admin-users-server";
 import { requireAdmin } from "@/lib/auth";
 import { buildMyMaterials, participantItemsSelect, type ParticipantItemRow } from "@/lib/my-materials-data";
 import { createClient } from "@/lib/supabase/server";
 import type { MyMaterial } from "@/lib/ui-data";
-import type { TeamMemberOption } from "@/components/team-member-picker";
 
 type SearchParams = Promise<{ member?: string | string[] }>;
 
@@ -21,15 +23,17 @@ export default async function TeamViewPage({ searchParams }: { searchParams: Sea
   const rawMemberId = firstSearchValue(params.member);
   const requestedMemberId = rawMemberId && uuidPattern.test(rawMemberId) ? rawMemberId : null;
 
-  const { data: profileRows, error: profilesError } = await supabase
-    .from("profiles")
-    .select("id, display_name, roles, active")
-    .order("active", { ascending: false })
-    .order("display_name", { ascending: true });
-
-  const members = (profileRows ?? []) as unknown as TeamMemberOption[];
+  const adminUsersResult = await listAdminUsers()
+    .then((users) => ({ users, error: null }))
+    .catch(() => ({ users: [], error: teamMembersLoadError }));
+  const members: TeamMemberOption[] = adminUsersResult.users.map((user) => ({
+    id: user.id,
+    display_name: user.display_name,
+    roles: user.roles,
+    active: user.active,
+  }));
   const selectedMember = requestedMemberId ? members.find((member) => member.id === requestedMemberId) ?? null : null;
-  const invalidMessage = profilesError
+  const invalidMessage = adminUsersResult.error
     ? "تعذر تحميل أعضاء الفريق. حاول مجددًا."
     : rawMemberId && !selectedMember
       ? "تعذر العثور على العضو المطلوب. اختر عضوًا من القائمة."
@@ -59,6 +63,8 @@ export default async function TeamViewPage({ searchParams }: { searchParams: Sea
       materials={materials}
       currentUserId={adminProfile.id}
       roles={adminProfile.roles}
+      assignmentTeamMembers={activeTeamMemberOptions(adminUsersResult.users)}
+      assignmentTeamMembersLoadError={adminUsersResult.error}
     />
   );
 }

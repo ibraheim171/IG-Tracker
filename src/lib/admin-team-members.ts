@@ -17,6 +17,20 @@ type FetchResponse = {
 
 export const teamMembersLoadError = "تعذر تحميل أعضاء الفريق. حاول مجددًا. رمز التشخيص: TEAM_MEMBERS_LOAD.";
 
+export type TeamMembersAvailability = "loading" | "error" | "empty" | "ready";
+
+export function teamMembersAvailability(teamMembers: TeamMemberOption[], error: string | null, loading: boolean): TeamMembersAvailability {
+  if (loading) return "loading";
+  if (error) return "error";
+  return teamMembers.length > 0 ? "ready" : "empty";
+}
+
+export function teamMembersForRole(teamMembers: TeamMemberOption[], role: "writer" | "producer" | "reviewer") {
+  return teamMembers
+    .filter((member) => member.roles.includes(role))
+    .sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
+}
+
 export function activeTeamMemberOptions(users: AdminUserResponse[]): TeamMemberOption[] {
   return users
     .filter((user) => user.active && !user.must_change_password)

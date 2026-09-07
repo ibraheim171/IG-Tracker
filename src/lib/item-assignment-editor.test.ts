@@ -7,7 +7,9 @@ import {
   createItemAssignmentEditorState,
   executeItemAssignmentSave,
   hydrateItemAssignments,
+  itemAssignmentControlsDisabled,
   itemAssignmentPayload,
+  itemAssignmentSaveEnabled,
   itemAssignmentsChanged,
   updateItemAssignment,
 } from "./item-assignment-editor.ts";
@@ -26,7 +28,7 @@ test("admin producer change remains submittable and sends the complete assignmen
 
   assert.equal(itemAssignmentsChanged(state, itemId), true);
   let submittedPayload: unknown = null;
-  const result = await executeItemAssignmentSave(state, itemId, true, async (payload) => {
+  const result = await executeItemAssignmentSave(state, itemId, true, true, async (payload) => {
     submittedPayload = payload;
     return "saved";
   });
@@ -51,7 +53,7 @@ test("successful save becomes persisted state and a refresh keeps the saved prod
 
   assert.equal(state.draft.producer_id, producerId);
   assert.equal(itemAssignmentsChanged(state, itemId), false);
-  assert.equal(itemAssignmentPayload(state, itemId, true), null);
+  assert.equal(itemAssignmentPayload(state, itemId, true, true), null);
 
   state = beginItemAssignmentLoad(state, itemId);
   state = hydrateItemAssignments(state, itemId, savedParticipants);
@@ -63,8 +65,8 @@ test("unchanged assignments do not create a save payload or false success path",
   const state = hydrateItemAssignments(createItemAssignmentEditorState(itemId), itemId, writerOnly);
   let submissions = 0;
   assert.equal(itemAssignmentsChanged(state, itemId), false);
-  assert.equal(itemAssignmentPayload(state, itemId, true), null);
-  assert.deepEqual(await executeItemAssignmentSave(state, itemId, true, async () => {
+  assert.equal(itemAssignmentPayload(state, itemId, true, true), null);
+  assert.deepEqual(await executeItemAssignmentSave(state, itemId, true, true, async () => {
     submissions += 1;
   }), { started: false });
   assert.equal(submissions, 0);
@@ -76,8 +78,8 @@ test("unauthorized assignment changes cannot alter state or produce a request", 
   let submissions = 0;
 
   assert.strictEqual(attempted, hydrated);
-  assert.equal(itemAssignmentPayload(attempted, itemId, false), null);
-  assert.deepEqual(await executeItemAssignmentSave(attempted, itemId, false, async () => {
+  assert.equal(itemAssignmentPayload(attempted, itemId, false, true), null);
+  assert.deepEqual(await executeItemAssignmentSave(attempted, itemId, false, true, async () => {
     submissions += 1;
   }), { started: false });
   assert.equal(submissions, 0);
@@ -96,7 +98,31 @@ test("same-item loading and hydration keep the editor and unsaved draft stable",
 
   const refreshed = hydrateItemAssignments(loadingState, itemId, writerOnly);
   assert.equal(refreshed.draft.producer_id, producerId);
-  assert.equal(itemAssignmentPayload(refreshed, itemId, true)?.producer_id, producerId);
+  assert.equal(itemAssignmentPayload(refreshed, itemId, true, true)?.producer_id, producerId);
+});
+
+test("same-item reload blocks submission until current details are ready", async () => {
+  let state = hydrateItemAssignments(createItemAssignmentEditorState(itemId), itemId, writerOnly);
+  state = updateItemAssignment(state, itemId, "producer_id", producerId, true);
+  state = beginItemAssignmentLoad(state, itemId);
+  let submissions = 0;
+  const loadingControl = { hydrated: true, itemReady: false, teamReady: true, busy: false };
+
+  assert.equal(itemAssignmentControlsDisabled(loadingControl), true);
+  assert.equal(itemAssignmentSaveEnabled(state, itemId, true, loadingControl), false);
+  assert.deepEqual(await executeItemAssignmentSave(state, itemId, true, false, async () => {
+    submissions += 1;
+  }), { started: false });
+  assert.equal(submissions, 0);
+
+  const readyControl = { ...loadingControl, itemReady: true };
+  assert.equal(itemAssignmentControlsDisabled(readyControl), false);
+  assert.equal(itemAssignmentSaveEnabled(state, itemId, true, readyControl), true);
+  assert.deepEqual(await executeItemAssignmentSave(state, itemId, true, true, async (payload) => {
+    submissions += 1;
+    return payload.producer_id;
+  }), { started: true, value: producerId });
+  assert.equal(submissions, 1);
 });
 
 test("opening another item resets assignment hydration and draft", () => {

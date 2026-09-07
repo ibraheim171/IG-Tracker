@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useReferenceData } from "@/components/reference-data-provider";
 import { type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
+import { teamMembersAvailability, teamMembersForRole } from "@/lib/admin-team-members";
 import { restoreCapturedDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
 import {
   beginItemAssignmentLoad,
@@ -11,7 +12,8 @@ import {
   createItemAssignmentEditorState,
   executeItemAssignmentSave,
   hydrateItemAssignments,
-  itemAssignmentsChanged,
+  itemAssignmentControlsDisabled,
+  itemAssignmentSaveEnabled,
   updateItemAssignment,
 } from "@/lib/item-assignment-editor";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
@@ -145,12 +147,6 @@ function memberLabel(member: TeamMemberOption) {
   return `${member.display_name} — ${member.email}`;
 }
 
-function membersByRole(teamMembers: TeamMemberOption[], role: "writer" | "producer" | "reviewer") {
-  return teamMembers
-    .filter((member) => member.roles.includes(role))
-    .sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
-}
-
 function buildItemPayload(editable: EditableState, fields: EditableItemField[]) {
   const payload: Partial<Record<EditableItemField, string | number | null>> = {};
   for (const field of fields) {
@@ -265,10 +261,17 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const canSubmitAssignments = canShowItemAssignmentEditor(isAdmin, item);
   const assignments = assignmentEditor.draft;
   const assignmentsHydrated = assignmentEditor.itemId === itemId && assignmentEditor.persisted !== null;
-  const assignmentsChanged = Boolean(itemId && itemAssignmentsChanged(assignmentEditor, itemId));
-  const writers = useMemo(() => membersByRole(teamMembers, "writer"), [teamMembers]);
-  const producers = useMemo(() => membersByRole(teamMembers, "producer"), [teamMembers]);
-  const reviewers = useMemo(() => membersByRole(teamMembers, "reviewer"), [teamMembers]);
+  const assignmentItemReady = loadState === "ready" && Boolean(item && item.id === itemId);
+  const teamAvailability = teamMembersAvailability(teamMembers, teamMembersLoadError, retryingTeamMembers);
+  const assignmentControlState = {
+    hydrated: assignmentsHydrated,
+    itemReady: assignmentItemReady,
+    teamReady: teamAvailability === "ready",
+    busy: isPending || actionBusy,
+  };
+  const writers = useMemo(() => teamMembersForRole(teamMembers, "writer"), [teamMembers]);
+  const producers = useMemo(() => teamMembersForRole(teamMembers, "producer"), [teamMembers]);
+  const reviewers = useMemo(() => teamMembersForRole(teamMembers, "reviewer"), [teamMembers]);
   const memberById = useMemo(() => new Map(teamMembers.map((member) => [member.id, member])), [teamMembers]);
   const ownerParts = currentOwnerParts(displayItem?.status ?? "idea");
   const currentAssignees = details?.participants
@@ -692,7 +695,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
 
   async function saveAssignments() {
     if (!item) return;
-    const submission = await executeItemAssignmentSave(assignmentEditor, item.id, canSubmitAssignments, (assignmentPayload) => (
+    const submission = await executeItemAssignmentSave(assignmentEditor, item.id, canSubmitAssignments && teamAvailability === "ready", assignmentItemReady, (assignmentPayload) => (
       fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -857,6 +860,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const showDetailsLoading = loadState === "loading";
   const retryButton = loadState === "error" ? <button className="button button-secondary" type="button" onClick={() => setRetryNonce((current) => current + 1)}>إعادة المحاولة</button> : null;
   const actionDisabled = isPending || actionBusy;
+  const assignmentControlsDisabled = itemAssignmentControlsDisabled(assignmentControlState);
+  const assignmentSaveEnabled = Boolean(itemId && itemAssignmentSaveEnabled(assignmentEditor, itemId, canSubmitAssignments, assignmentControlState));
 
   return (
     <div className="veil" onClick={handleClose}>
@@ -908,14 +913,14 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 <summary>تعيينات الفريق</summary>
                 <div className="accordion-body stack">
                 <p className="muted">هذا القسم للأدمن فقط؛ الحفظ يراجع أدوار الحسابات النشطة داخل قاعدة البيانات.</p>
-                {!assignmentsHydrated ? <p className="muted" role="status">جارٍ تحميل التعيينات...</p> : null}
-                {assignmentsHydrated && teamMembers.length === 0 && !teamMembersLoadError ? <p className="muted">لا يوجد أعضاء فريق نشطون متاحون للتعيين.</p> : null}
+                {!assignmentItemReady && loadState !== "error" ? <p className="muted" role="status">جارٍ تحميل التعيينات... ستتاح الحقول بعد اكتمال التحميل.</p> : null}
+                {assignmentsHydrated && teamAvailability === "empty" ? <p className="muted">لا يوجد أعضاء فريق نشطون متاحون للتعيين.</p> : null}
                 <div className="form-grid">
-                  <label className="field">الكاتب المسؤول<select className="input" required disabled={!assignmentsHydrated || Boolean(teamMembersLoadError) || retryingTeamMembers || actionDisabled} value={assignments.writer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "writer_id", event.target.value, canEditAssignments))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
-                  <label className="field">المنتج المسؤول<select className="input" disabled={!assignmentsHydrated || Boolean(teamMembersLoadError) || retryingTeamMembers || actionDisabled} value={assignments.producer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "producer_id", event.target.value, canEditAssignments))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                  <label className="field">الكاتب المسؤول<select className="input" required disabled={assignmentControlsDisabled} value={assignments.writer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "writer_id", event.target.value, canEditAssignments))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                  <label className="field">المنتج المسؤول<select className="input" disabled={assignmentControlsDisabled} value={assignments.producer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "producer_id", event.target.value, canEditAssignments))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
                 </div>
-                <label className="field">المراجع المسؤول<select className="input" disabled={!assignmentsHydrated || Boolean(teamMembersLoadError) || retryingTeamMembers || actionDisabled} value={assignments.reviewer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "reviewer_id", event.target.value, canEditAssignments))}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
-                <button className="button button-secondary" type="button" disabled={!assignments.writer_id || !assignmentsChanged || Boolean(teamMembersLoadError) || retryingTeamMembers || actionDisabled} onClick={() => runAction(saveAssignments)}>حفظ التعيينات</button>
+                <label className="field">المراجع المسؤول<select className="input" disabled={assignmentControlsDisabled} value={assignments.reviewer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "reviewer_id", event.target.value, canEditAssignments))}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                <button className="button button-secondary" type="button" disabled={!assignmentSaveEnabled} onClick={() => runAction(saveAssignments)}>حفظ التعيينات</button>
                 </div>
               </details>
             ) : null}

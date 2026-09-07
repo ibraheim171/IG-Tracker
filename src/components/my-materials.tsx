@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { ItemDrawer } from "@/components/item-drawer";
+import type { TeamMemberOption } from "@/lib/admin-create-item";
+import { fetchAdminTeamMembers } from "@/lib/admin-team-members";
 import type { MyMaterial, RoleName } from "@/lib/ui-data";
-import { formatHebronDateTime, statusLabels } from "@/lib/ui-data";
+import { formatHebronDateTime, isAdminRole, statusLabels } from "@/lib/ui-data";
 
 type Props = {
   materials: MyMaterial[];
@@ -15,19 +17,39 @@ type Props = {
   beforeLists?: ReactNode;
   showMaterialSections?: boolean;
   loadError?: string | null;
+  teamMembers?: TeamMemberOption[];
+  teamMembersLoadError?: string | null;
 };
 
 function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function MyMaterials({ materials, currentUserId, roles, title = "موادي", eyebrow = "شخصي", beforeLists, showMaterialSections = true, loadError = null }: Props) {
+export function MyMaterials({ materials, currentUserId, roles, title = "موادي", eyebrow = "شخصي", beforeLists, showMaterialSections = true, loadError = null, teamMembers: initialTeamMembers = [], teamMembersLoadError: initialTeamMembersLoadError = null }: Props) {
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
+  const [teamMembers, setTeamMembers] = useState(initialTeamMembers);
+  const [teamMembersError, setTeamMembersError] = useState(initialTeamMembersLoadError);
+  const [retryingTeamMembers, setRetryingTeamMembers] = useState(false);
+  const isAdmin = isAdminRole(roles);
   const isUnsubmittedWriterItem = (material: MyMaterial) => material.parts.includes("writer") && material.item.status === "idea";
   const current = materials.filter(isUnsubmittedWriterItem);
   const previous = materials.filter((material) => !isUnsubmittedWriterItem(material));
   const openItem = useMemo(() => materials.find((material) => material.item_id === openItemId)?.item ?? null, [materials, openItemId]);
+
+  useEffect(() => {
+    setTeamMembers(initialTeamMembers);
+    setTeamMembersError(initialTeamMembersLoadError);
+  }, [initialTeamMembers, initialTeamMembersLoadError]);
+
+  async function retryTeamMembers() {
+    if (!isAdmin || retryingTeamMembers) return;
+    setRetryingTeamMembers(true);
+    const result = await fetchAdminTeamMembers();
+    setTeamMembers(result.teamMembers);
+    setTeamMembersError(result.error);
+    setRetryingTeamMembers(false);
+  }
 
   return (
     <main className="page wide-page stack">
@@ -44,6 +66,15 @@ export function MyMaterials({ materials, currentUserId, roles, title = "مواد
           <button className="button button-secondary" type="button" onClick={() => router.refresh()}>إعادة المحاولة</button>
         </section>
       ) : beforeLists}
+
+      {isAdmin && teamMembersError ? (
+        <section className="card stack" role="alert">
+          <p>{teamMembersError}</p>
+          <button className="button button-secondary" type="button" disabled={retryingTeamMembers} onClick={() => { void retryTeamMembers(); }}>
+            {retryingTeamMembers ? "جارٍ تحميل أعضاء الفريق..." : "إعادة تحميل أعضاء الفريق"}
+          </button>
+        </section>
+      ) : null}
 
       {showMaterialSections ? (
         <>
@@ -79,7 +110,7 @@ export function MyMaterials({ materials, currentUserId, roles, title = "مواد
         </>
       ) : null}
 
-      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} largeCaption />
+      <ItemDrawer itemId={openItemId} initialItem={openItem} onClose={() => setOpenItemId(null)} onChanged={() => router.refresh()} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} teamMembersLoadError={teamMembersError} onRetryTeamMembers={retryTeamMembers} retryingTeamMembers={retryingTeamMembers} largeCaption />
     </main>
   );
 }

@@ -24,6 +24,13 @@ export type ItemAssignmentPayload = {
   reviewer_id: string | null;
 };
 
+export type ItemAssignmentControlState = {
+  hydrated: boolean;
+  itemReady: boolean;
+  teamReady: boolean;
+  busy: boolean;
+};
+
 const emptyAssignments: ItemAssignmentState = {
   writer_id: "",
   producer_id: "",
@@ -97,12 +104,29 @@ export function itemAssignmentsChanged(state: ItemAssignmentEditorState, itemId:
     && !assignmentsEqual(state.draft, state.persisted);
 }
 
+export function itemAssignmentControlsDisabled(control: ItemAssignmentControlState) {
+  return !control.hydrated || !control.itemReady || !control.teamReady || control.busy;
+}
+
+export function itemAssignmentSaveEnabled(
+  state: ItemAssignmentEditorState,
+  itemId: string,
+  authorized: boolean,
+  control: ItemAssignmentControlState,
+) {
+  return authorized
+    && !itemAssignmentControlsDisabled(control)
+    && Boolean(state.draft.writer_id)
+    && itemAssignmentsChanged(state, itemId);
+}
+
 export function itemAssignmentPayload(
   state: ItemAssignmentEditorState,
   itemId: string,
   authorized: boolean,
+  ready: boolean,
 ): ItemAssignmentPayload | null {
-  if (!authorized || !itemAssignmentsChanged(state, itemId) || !state.draft.writer_id) return null;
+  if (!authorized || !ready || !itemAssignmentsChanged(state, itemId) || !state.draft.writer_id) return null;
   return {
     writer_id: state.draft.writer_id,
     producer_id: state.draft.producer_id || null,
@@ -114,9 +138,10 @@ export async function executeItemAssignmentSave<T>(
   state: ItemAssignmentEditorState,
   itemId: string,
   authorized: boolean,
+  ready: boolean,
   submit: (payload: ItemAssignmentPayload) => Promise<T>,
 ): Promise<{ started: false } | { started: true; value: T }> {
-  const payload = itemAssignmentPayload(state, itemId, authorized);
+  const payload = itemAssignmentPayload(state, itemId, authorized, ready);
   if (!payload) return { started: false };
   return { started: true, value: await submit(payload) };
 }

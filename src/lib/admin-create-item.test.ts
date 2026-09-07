@@ -13,6 +13,12 @@ const assignmentsRoute = readFileSync("src/app/api/admin/items/[itemId]/particip
 const slotsBoard = readFileSync("src/components/slots-board.tsx", "utf8");
 const createModal = readFileSync("src/components/admin-create-item-modal.tsx", "utf8");
 const itemDrawer = readFileSync("src/components/item-drawer.tsx", "utf8");
+const myMaterials = readFileSync("src/components/my-materials.tsx", "utf8");
+const waitingBoard = readFileSync("src/components/waiting-board.tsx", "utf8");
+const teamView = readFileSync("src/components/team-view.tsx", "utf8");
+const myPage = readFileSync("src/app/(protected)/my/page.tsx", "utf8");
+const waitingPage = readFileSync("src/app/(protected)/waiting/page.tsx", "utf8");
+const teamViewPage = readFileSync("src/app/(protected)/admin/team-view/page.tsx", "utf8");
 const globalsCss = readFileSync("src/app/globals.css", "utf8");
 const rootLayout = readFileSync("src/app/layout.tsx", "utf8");
 
@@ -222,6 +228,25 @@ test("shared assignment edit logic hides historical items while drawer hydration
   assert.match(itemDrawer, /canShowItemAssignmentEditor\(isAdmin, assignmentDisplayState\)/);
   assert.match(itemDrawer, /canShowItemAssignmentEditor\(isAdmin, item\)/);
   assert.match(itemDrawer, /\{canEditAssignments \? \(/);
+});
+
+test("all shared drawer entry points supply admin-only team state and retry controls", () => {
+  for (const source of [myMaterials, waitingBoard]) {
+    assert.match(source, /teamMembers=\{teamMembers\}/);
+    assert.match(source, /teamMembersLoadError=\{teamMembersError\}/);
+    assert.match(source, /onRetryTeamMembers=\{retryTeamMembers\}/);
+    assert.match(source, /if \(!isAdmin \|\| retryingTeamMembers\) return/);
+  }
+  for (const source of [myPage, waitingPage]) {
+    assert.match(source, /isAdmin[\s\S]*\? listAdminUsers\(\)/);
+    assert.match(source, /: Promise\.resolve\(\{ users: \[\], error: null \}\)/);
+  }
+  assert.match(teamView, /teamMembers=\{assignmentTeamMembers\}/);
+  assert.match(teamView, /teamMembersLoadError=\{assignmentTeamMembersLoadError\}/);
+  assert.match(teamViewPage, /await requireAdmin\(\)/);
+  assert.match(teamViewPage, /listAdminUsers\(\)/);
+  assert.match(teamViewPage, /assignmentTeamMembers=\{activeTeamMemberOptions\(adminUsersResult\.users\)\}/);
+  assert.match(teamViewPage, /assignmentTeamMembersLoadError=\{adminUsersResult\.error\}/);
 });
 
 test("create and assignment routes are same-origin admin-only RPC wrappers without service role or direct writes", () => {
