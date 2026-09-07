@@ -2,8 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useReferenceData } from "@/components/reference-data-provider";
-import { canEditItemAssignments, type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
+import { type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
 import { restoreCapturedDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
+import {
+  beginItemAssignmentLoad,
+  canShowItemAssignmentEditor,
+  commitItemAssignments,
+  createItemAssignmentEditorState,
+  executeItemAssignmentSave,
+  hydrateItemAssignments,
+  itemAssignmentsChanged,
+  updateItemAssignment,
+} from "@/lib/item-assignment-editor";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
 import { executeInstagramPublish, isInstagramPermalink } from "@/lib/operational-ui";
 import { createClient } from "@/lib/supabase/client";
@@ -57,12 +67,6 @@ type EditableState = {
   production_file_url: string;
   partnerIds: string[];
   newPartner: string;
-};
-
-type AssignmentState = {
-  writer_id: string;
-  producer_id: string;
-  reviewer_id: string;
 };
 
 type TrackState = {
@@ -134,14 +138,6 @@ function buildEditable(item: ItemRow, partnerRows: PartnerRecord[]): EditableSta
     production_file_url: item.production_file_url ?? "",
     partnerIds: partnerRows.map((row) => row.partner_id.toString()),
     newPartner: "",
-  };
-}
-
-function buildAssignments(participants: ParticipantRecord[]): AssignmentState {
-  return {
-    writer_id: participants.find((row) => row.part === "writer")?.user_id ?? "",
-    producer_id: participants.find((row) => row.part === "producer")?.user_id ?? "",
-    reviewer_id: participants.find((row) => row.part === "reviewer")?.user_id ?? "",
   };
 }
 
@@ -224,7 +220,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const confirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
   const [editable, setEditable] = useState<EditableState | null>(null);
-  const [assignments, setAssignments] = useState<AssignmentState>({ writer_id: "", producer_id: "", reviewer_id: "" });
+  const [assignmentEditor, setAssignmentEditor] = useState(() => createItemAssignmentEditorState(itemId));
+  const [assignmentSectionOpen, setAssignmentSectionOpen] = useState(false);
   const [trackForm, setTrackForm] = useState<TrackState>(emptyTrack);
   const [showTrackForm, setShowTrackForm] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>("idle");
@@ -263,7 +260,12 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const captionText = item?.caption ?? preview?.caption ?? null;
   const writerDeliveryUrl = item?.writer_delivery_url ?? null;
   const productionFileUrl = item?.production_file_url ?? preview?.production_file_url ?? null;
-  const canEditAssignments = isAdmin && teamMembers.length > 0 && canEditItemAssignments(item);
+  const assignmentDisplayState = displayItem ? { status: displayItem.status, is_archived: item?.is_archived ?? false } : null;
+  const canEditAssignments = canShowItemAssignmentEditor(isAdmin, assignmentDisplayState);
+  const canSubmitAssignments = canShowItemAssignmentEditor(isAdmin, item);
+  const assignments = assignmentEditor.draft;
+  const assignmentsHydrated = assignmentEditor.itemId === itemId && assignmentEditor.persisted !== null;
+  const assignmentsChanged = Boolean(itemId && itemAssignmentsChanged(assignmentEditor, itemId));
   const writers = useMemo(() => membersByRole(teamMembers, "writer"), [teamMembers]);
   const producers = useMemo(() => membersByRole(teamMembers, "producer"), [teamMembers]);
   const reviewers = useMemo(() => membersByRole(teamMembers, "reviewer"), [teamMembers]);
@@ -284,6 +286,10 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   useEffect(() => {
     latestEditableRef.current = editable;
   }, [editable]);
+
+  useEffect(() => {
+    setAssignmentSectionOpen(false);
+  }, [itemId]);
 
   useEffect(() => () => {
     clearAutoSaveTimer();
@@ -352,7 +358,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         hasUserEditedFields.current = false;
         setDetails(null);
         setEditable(null);
-        setAssignments({ writer_id: "", producer_id: "", reviewer_id: "" });
+        setAssignmentEditor((current) => beginItemAssignmentLoad(current, null));
         setTrackForm(emptyTrack);
         setShowTrackForm(false);
         setLoadState("idle");
@@ -375,7 +381,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setLoadState("loading");
       setDetails(null);
       setEditable(null);
-      setAssignments({ writer_id: "", producer_id: "", reviewer_id: "" });
+      setAssignmentEditor((current) => beginItemAssignmentLoad(current, itemId));
       setTrackForm(emptyTrack);
       setShowTrackForm(false);
       setFailedAdvance(null);
@@ -409,7 +415,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         lastSavedSignatureRef.current = editableSignature(nextEditable, saveFieldsFor(payload.details.item, payload.details.participants));
         setDetails(payload.details);
         setEditable(nextEditable);
-        setAssignments(buildAssignments(payload.details.participants));
+        setAssignmentEditor((current) => hydrateItemAssignments(current, itemId, payload.details.participants));
         setLoadState("ready");
       } catch (error) {
         if (sequence !== loadSequence.current) return;
@@ -685,18 +691,17 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   async function saveAssignments() {
-    if (!item || item.is_archived || !isAdmin || !assignments.writer_id) return;
-
-    const response = await fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({
-        writer_id: assignments.writer_id,
-        producer_id: assignments.producer_id || null,
-        reviewer_id: assignments.reviewer_id || null,
-      }),
-    });
+    if (!item) return;
+    const submission = await executeItemAssignmentSave(assignmentEditor, item.id, canSubmitAssignments, (assignmentPayload) => (
+      fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(assignmentPayload),
+      })
+    ));
+    if (!submission.started) return;
+    const response = submission.value;
     const result = (await response.json().catch(() => ({}))) as { participants?: Pick<ParticipantRecord, "user_id" | "part">[]; error?: string };
     if (!response.ok || !result.participants) {
       setMessage(result.error ?? assignmentsSaveErrorMessage);
@@ -708,7 +713,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       profiles: { display_name: memberById.get(row.user_id)?.display_name ?? "—" },
     }));
     setDetails((current) => current && current.item.id === item.id ? { ...current, participants: nextParticipants } : current);
-    setAssignments(buildAssignments(nextParticipants));
+    setAssignmentEditor((current) => commitItemAssignments(current, item.id, nextParticipants));
     setMessage("تم حفظ تعيينات الفريق.");
     onChanged?.();
   }
@@ -898,17 +903,19 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               </section>
             ) : null}
 
-            {item && canEditAssignments ? (
-              <details className="drawer-section accordion">
+            {canEditAssignments ? (
+              <details className="drawer-section accordion" open={assignmentSectionOpen} onToggle={(event) => setAssignmentSectionOpen(event.currentTarget.open)}>
                 <summary>تعيينات الفريق</summary>
                 <div className="accordion-body stack">
                 <p className="muted">هذا القسم للأدمن فقط؛ الحفظ يراجع أدوار الحسابات النشطة داخل قاعدة البيانات.</p>
+                {!assignmentsHydrated ? <p className="muted" role="status">جارٍ تحميل التعيينات...</p> : null}
+                {assignmentsHydrated && teamMembers.length === 0 && !teamMembersLoadError ? <p className="muted">لا يوجد أعضاء فريق نشطون متاحون للتعيين.</p> : null}
                 <div className="form-grid">
-                  <label className="field">الكاتب المسؤول<select className="input" required value={assignments.writer_id} onChange={(event) => setAssignments((current) => ({ ...current, writer_id: event.target.value }))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
-                  <label className="field">المنتج المسؤول<select className="input" value={assignments.producer_id} onChange={(event) => setAssignments((current) => ({ ...current, producer_id: event.target.value }))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                  <label className="field">الكاتب المسؤول<select className="input" required disabled={!assignmentsHydrated || Boolean(teamMembersLoadError) || retryingTeamMembers || actionDisabled} value={assignments.writer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "writer_id", event.target.value, canEditAssignments))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                  <label className="field">المنتج المسؤول<select className="input" disabled={!assignmentsHydrated || Boolean(teamMembersLoadError) || retryingTeamMembers || actionDisabled} value={assignments.producer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "producer_id", event.target.value, canEditAssignments))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
                 </div>
-                <label className="field">المراجع المسؤول<select className="input" value={assignments.reviewer_id} onChange={(event) => setAssignments((current) => ({ ...current, reviewer_id: event.target.value }))}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
-                <button className="button button-secondary" type="button" disabled={!assignments.writer_id || actionDisabled} onClick={() => runAction(saveAssignments)}>حفظ التعيينات</button>
+                <label className="field">المراجع المسؤول<select className="input" disabled={!assignmentsHydrated || Boolean(teamMembersLoadError) || retryingTeamMembers || actionDisabled} value={assignments.reviewer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "reviewer_id", event.target.value, canEditAssignments))}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                <button className="button button-secondary" type="button" disabled={!assignments.writer_id || !assignmentsChanged || Boolean(teamMembersLoadError) || retryingTeamMembers || actionDisabled} onClick={() => runAction(saveAssignments)}>حفظ التعيينات</button>
                 </div>
               </details>
             ) : null}

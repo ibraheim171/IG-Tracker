@@ -16,7 +16,8 @@
     "test:dialog-focus": "node --test src/lib/dialog-focus.test.ts",
     "test:admin-team-members": "node --test src/lib/admin-team-members.test.ts",
     "test:ready-publish-dialog": "node --test src/lib/ready-publish-dialog.test.ts",
-    "test": "pnpm run test:admin-users && pnpm run test:item-permissions && pnpm run test:restrict-writer-item-fields && pnpm run test:admin-reassign-tasks && pnpm run test:admin-create-item && pnpm run test:workflow-ui && pnpm run test:operational-ui && pnpm run test:dialog-focus && pnpm run test:admin-team-members && pnpm run test:ready-publish-dialog"
+    "test:item-assignment-editor": "node --test src/lib/item-assignment-editor.test.ts",
+    "test": "pnpm run test:admin-users && pnpm run test:item-permissions && pnpm run test:restrict-writer-item-fields && pnpm run test:admin-reassign-tasks && pnpm run test:admin-create-item && pnpm run test:workflow-ui && pnpm run test:operational-ui && pnpm run test:dialog-focus && pnpm run test:admin-team-members && pnpm run test:ready-publish-dialog && pnpm run test:item-assignment-editor"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

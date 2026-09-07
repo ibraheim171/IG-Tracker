@@ -213,14 +213,15 @@ test("admin assignment edit RPC replaces operational assignments through trusted
   assert.match(creationMigration, /on conflict \(item_id, user_id, part\) do nothing/);
 });
 
-test("shared assignment edit logic and UI hide editor for historical item states", () => {
+test("shared assignment edit logic hides historical items while drawer hydration keeps active editor mounted", () => {
   assert.equal(canEditItemAssignments({ status: "idea", is_archived: false }), true);
   assert.equal(canEditItemAssignments({ status: "ready", is_archived: false }), true);
   assert.equal(canEditItemAssignments({ status: "published", is_archived: false }), false);
   assert.equal(canEditItemAssignments({ status: "cancelled", is_archived: false }), false);
   assert.equal(canEditItemAssignments({ status: "idea", is_archived: true }), false);
-  assert.match(itemDrawer, /canEditItemAssignments\(item\)/);
-  assert.match(itemDrawer, /item && canEditAssignments/);
+  assert.match(itemDrawer, /canShowItemAssignmentEditor\(isAdmin, assignmentDisplayState\)/);
+  assert.match(itemDrawer, /canShowItemAssignmentEditor\(isAdmin, item\)/);
+  assert.match(itemDrawer, /\{canEditAssignments \? \(/);
 });
 
 test("create and assignment routes are same-origin admin-only RPC wrappers without service role or direct writes", () => {
