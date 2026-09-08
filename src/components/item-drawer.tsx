@@ -2,8 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useReferenceData } from "@/components/reference-data-provider";
-import { canEditItemAssignments, type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
+import { type AdminCreatedTrack, type TeamMemberOption } from "@/lib/admin-create-item";
+import { teamMembersAvailability, teamMembersForRole } from "@/lib/admin-team-members";
+import { restoreCapturedDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
+import {
+  beginItemAssignmentLoad,
+  canShowItemAssignmentEditor,
+  commitItemAssignments,
+  createItemAssignmentEditorState,
+  executeItemAssignmentSave,
+  hydrateItemAssignments,
+  itemAssignmentControlsDisabled,
+  itemAssignmentSaveEnabled,
+  multipleAssignmentParts,
+  updateItemAssignment,
+} from "@/lib/item-assignment-editor";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
+import { executeInstagramPublish, isInstagramPermalink } from "@/lib/operational-ui";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/lib/database.types";
 import type { DrawerPreview, IdeaTypeOption, ItemStatus, ParticipantPart, RoleName, TrackOption } from "@/lib/ui-data";
@@ -33,6 +48,7 @@ type OpenSlot = Pick<Tables<"v_slot_board">, "slot_id" | "slot_at" | "state" | "
 type DrawerDetails = {
   item: ItemRow;
   participants: ParticipantRecord[];
+  assignmentRevision: string;
   partners: PartnerRecord[];
   approvals: ApprovalRecord[];
   transitions: TransitionRecord[];
@@ -43,6 +59,7 @@ type DrawerDetails = {
 
 type ItemDetailsResponse = { details: DrawerDetails } | { error: string };
 type LoadState = "idle" | "loading" | "ready" | "error";
+type AssignmentConflictState = "refreshing" | "ready" | "error" | null;
 type SaveOptions = { showMessage: boolean; notifyList: boolean };
 
 type EditableState = {
@@ -55,12 +72,6 @@ type EditableState = {
   production_file_url: string;
   partnerIds: string[];
   newPartner: string;
-};
-
-type AssignmentState = {
-  writer_id: string;
-  producer_id: string;
-  reviewer_id: string;
 };
 
 type TrackState = {
@@ -83,6 +94,9 @@ type Props = {
   currentUserId: string;
   roles: RoleName[];
   teamMembers?: TeamMemberOption[];
+  teamMembersLoadError?: string | null;
+  onRetryTeamMembers?: () => void | Promise<void>;
+  retryingTeamMembers?: boolean;
   largeCaption?: boolean;
 };
 
@@ -132,23 +146,15 @@ function buildEditable(item: ItemRow, partnerRows: PartnerRecord[]): EditableSta
   };
 }
 
-function buildAssignments(participants: ParticipantRecord[]): AssignmentState {
-  return {
-    writer_id: participants.find((row) => row.part === "writer")?.user_id ?? "",
-    producer_id: participants.find((row) => row.part === "producer")?.user_id ?? "",
-    reviewer_id: participants.find((row) => row.part === "reviewer")?.user_id ?? "",
-  };
-}
-
 function memberLabel(member: TeamMemberOption) {
   return `${member.display_name} — ${member.email}`;
 }
 
-function membersByRole(teamMembers: TeamMemberOption[], role: "writer" | "producer" | "reviewer") {
-  return teamMembers
-    .filter((member) => member.roles.includes(role))
-    .sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
-}
+const assignmentPartLabels = {
+  writer: "الكاتب",
+  producer: "المنتج",
+  reviewer: "المراجع",
+} as const;
 
 function buildItemPayload(editable: EditableState, fields: EditableItemField[]) {
   const payload: Partial<Record<EditableItemField, string | number | null>> = {};
@@ -197,7 +203,7 @@ function findIdeaType(ideaTypes: IdeaTypeOption[], item: ItemRow | DrawerPreview
   return ideaTypes.find((ideaType) => ideaType.id === item?.idea_type_id) ?? null;
 }
 
-export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, teamMembers = [], largeCaption }: Props) {
+export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUserId, roles, teamMembers = [], teamMembersLoadError = null, onRetryTeamMembers, retryingTeamMembers = false, largeCaption }: Props) {
   const { tracks, ideaTypes, partners, refreshReferenceData } = useReferenceData();
   const supabase = useMemo(() => createClient(), []);
   const loadSequence = useRef(0);
@@ -213,11 +219,15 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const needsListRefreshRef = useRef(false);
   const actionInFlightRef = useRef(false);
   const confirmDialogRef = useRef<HTMLElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const drawerReturnFocusRef = useRef<HTMLElement | null>(null);
   const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
   const confirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const [details, setDetails] = useState<DrawerDetails | null>(null);
   const [editable, setEditable] = useState<EditableState | null>(null);
-  const [assignments, setAssignments] = useState<AssignmentState>({ writer_id: "", producer_id: "", reviewer_id: "" });
+  const [assignmentEditor, setAssignmentEditor] = useState(() => createItemAssignmentEditorState(itemId));
+  const [assignmentConflict, setAssignmentConflict] = useState<AssignmentConflictState>(null);
+  const [assignmentSectionOpen, setAssignmentSectionOpen] = useState(false);
   const [trackForm, setTrackForm] = useState<TrackState>(emptyTrack);
   const [showTrackForm, setShowTrackForm] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>("idle");
@@ -256,10 +266,29 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const captionText = item?.caption ?? preview?.caption ?? null;
   const writerDeliveryUrl = item?.writer_delivery_url ?? null;
   const productionFileUrl = item?.production_file_url ?? preview?.production_file_url ?? null;
-  const canEditAssignments = isAdmin && teamMembers.length > 0 && canEditItemAssignments(item);
-  const writers = useMemo(() => membersByRole(teamMembers, "writer"), [teamMembers]);
-  const producers = useMemo(() => membersByRole(teamMembers, "producer"), [teamMembers]);
-  const reviewers = useMemo(() => membersByRole(teamMembers, "reviewer"), [teamMembers]);
+  const assignmentDisplayState = displayItem ? { status: displayItem.status, is_archived: item?.is_archived ?? false } : null;
+  const canEditAssignments = canShowItemAssignmentEditor(isAdmin, assignmentDisplayState);
+  const canSubmitAssignments = canShowItemAssignmentEditor(isAdmin, item);
+  const assignments = assignmentEditor.draft;
+  const assignmentsHydrated = assignmentEditor.itemId === itemId && assignmentEditor.persisted !== null && assignmentEditor.revision !== null;
+  const assignmentItemReady = loadState === "ready" && Boolean(item && item.id === itemId);
+  const teamAvailability = teamMembersAvailability(teamMembers, teamMembersLoadError, retryingTeamMembers);
+  const multiplyAssignedParts = useMemo(
+    () => multipleAssignmentParts(details?.participants ?? []),
+    [details?.participants],
+  );
+  const assignmentsHaveSingularRepresentation = multiplyAssignedParts.length === 0;
+  const assignmentControlState = {
+    hydrated: assignmentsHydrated,
+    itemReady: assignmentItemReady,
+    teamReady: teamAvailability === "ready",
+    singularAssignments: assignmentsHaveSingularRepresentation,
+    revisionReady: assignmentConflict !== "error",
+    busy: isPending || actionBusy,
+  };
+  const writers = useMemo(() => teamMembersForRole(teamMembers, "writer"), [teamMembers]);
+  const producers = useMemo(() => teamMembersForRole(teamMembers, "producer"), [teamMembers]);
+  const reviewers = useMemo(() => teamMembersForRole(teamMembers, "reviewer"), [teamMembers]);
   const memberById = useMemo(() => new Map(teamMembers.map((member) => [member.id, member])), [teamMembers]);
   const ownerParts = currentOwnerParts(displayItem?.status ?? "idea");
   const currentAssignees = details?.participants
@@ -278,6 +307,10 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     latestEditableRef.current = editable;
   }, [editable]);
 
+  useEffect(() => {
+    setAssignmentSectionOpen(false);
+  }, [itemId]);
+
   useEffect(() => () => {
     clearAutoSaveTimer();
     queuedSaveRef.current = null;
@@ -293,6 +326,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     }, 0);
 
     function handleConfirmKeydown(event: KeyboardEvent) {
+      if (event.key === "Tab") trapDialogFocus(event, confirmDialogRef.current);
       if (event.key === "Escape") {
         event.preventDefault();
         settleConfirmation(false);
@@ -305,6 +339,27 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       document.removeEventListener("keydown", handleConfirmKeydown);
     };
   }, [confirmDialog]);
+
+  useEffect(() => {
+    if (!itemId) return;
+    drawerReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }, [itemId]);
+
+  useEffect(() => {
+    if (!itemId || confirmDialog) return;
+
+    drawerRef.current?.focus();
+    function handleDrawerKeydown(event: KeyboardEvent) {
+      if (event.key === "Tab") trapDialogFocus(event, drawerRef.current);
+      if (event.key === "Escape" && !actionInFlightRef.current && !trackSaving) {
+        event.preventDefault();
+        void handleClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleDrawerKeydown);
+    return () => document.removeEventListener("keydown", handleDrawerKeydown);
+  }, [confirmDialog, itemId, trackSaving]);
 
   useEffect(() => {
     const sequence = ++loadSequence.current;
@@ -323,7 +378,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         hasUserEditedFields.current = false;
         setDetails(null);
         setEditable(null);
-        setAssignments({ writer_id: "", producer_id: "", reviewer_id: "" });
+        setAssignmentEditor((current) => beginItemAssignmentLoad(current, null));
+        setAssignmentConflict(null);
         setTrackForm(emptyTrack);
         setShowTrackForm(false);
         setLoadState("idle");
@@ -346,7 +402,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setLoadState("loading");
       setDetails(null);
       setEditable(null);
-      setAssignments({ writer_id: "", producer_id: "", reviewer_id: "" });
+      setAssignmentEditor((current) => beginItemAssignmentLoad(current, itemId));
+      setAssignmentConflict(null);
       setTrackForm(emptyTrack);
       setShowTrackForm(false);
       setFailedAdvance(null);
@@ -380,7 +437,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         lastSavedSignatureRef.current = editableSignature(nextEditable, saveFieldsFor(payload.details.item, payload.details.participants));
         setDetails(payload.details);
         setEditable(nextEditable);
-        setAssignments(buildAssignments(payload.details.participants));
+        setAssignmentEditor((current) => hydrateItemAssignments(current, itemId, payload.details.participants, payload.details.assignmentRevision));
         setLoadState("ready");
       } catch (error) {
         if (sequence !== loadSequence.current) return;
@@ -590,8 +647,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   async function handleClose() {
-    if (closeInFlightRef.current) return;
+    if (closeInFlightRef.current || actionInFlightRef.current || trackSaving) return;
     closeInFlightRef.current = true;
+    const returnFocusTarget = drawerReturnFocusRef.current;
     try {
       clearAutoSaveTimer();
       const hasPendingSave = Boolean(queuedSaveRef.current) || saveInFlightRef.current || Boolean(saveDrainPromiseRef.current);
@@ -605,6 +663,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       }
 
       onClose();
+      window.setTimeout(() => {
+        restoreCapturedDialogFocus(returnFocusTarget, drawerReturnFocusRef);
+      }, 0);
     } finally {
       closeInFlightRef.current = false;
     }
@@ -652,32 +713,81 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   async function saveAssignments() {
-    if (!item || item.is_archived || !isAdmin || !assignments.writer_id) return;
+    if (!item || !assignmentSaveEnabled) return;
+    setAssignmentConflict(null);
+    setMessage(null);
+    try {
+      const submission = await executeItemAssignmentSave(assignmentEditor, item.id, canSubmitAssignments, assignmentControlState, (assignmentPayload) => (
+        fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(assignmentPayload),
+        })
+      ));
+      if (!submission.started) return;
+      const response = submission.value;
+      const result = (await response.json().catch(() => ({}))) as { participants?: Pick<ParticipantRecord, "user_id" | "part">[]; assignmentRevision?: string; error?: string; code?: string };
+      if (response.status === 409 && (result.code === "E_ASSIGNMENTS_CONFLICT" || result.code === "E_MULTIPLE_ASSIGNMENTS")) {
+        await refreshAssignmentsAfterConflict(item.id, result.code === "E_ASSIGNMENTS_CONFLICT");
+        return;
+      }
+      if (!response.ok || !result.participants) {
+        setMessage(result.error ?? assignmentsSaveErrorMessage);
+        return;
+      }
+      const savedRevision = result.assignmentRevision;
+      if (!savedRevision) {
+        setMessage(assignmentsSaveErrorMessage);
+        return;
+      }
 
-    const response = await fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({
-        writer_id: assignments.writer_id,
-        producer_id: assignments.producer_id || null,
-        reviewer_id: assignments.reviewer_id || null,
-      }),
-    });
-    const result = (await response.json().catch(() => ({}))) as { participants?: Pick<ParticipantRecord, "user_id" | "part">[]; error?: string };
-    if (!response.ok || !result.participants) {
-      setMessage(result.error ?? assignmentsSaveErrorMessage);
-      return;
+      const nextParticipants: ParticipantRecord[] = result.participants.map((row) => ({
+        ...row,
+        profiles: { display_name: memberById.get(row.user_id)?.display_name ?? "—" },
+      }));
+      setDetails((current) => current && current.item.id === item.id ? {
+        ...current,
+        participants: nextParticipants,
+        assignmentRevision: savedRevision,
+      } : current);
+      setAssignmentEditor((current) => commitItemAssignments(current, item.id, nextParticipants, savedRevision));
+      setAssignmentConflict(null);
+      setMessage("تم حفظ تعيينات الفريق.");
+      onChanged?.();
+    } catch {
+      setMessage(assignmentsSaveErrorMessage);
     }
+  }
 
-    const nextParticipants: ParticipantRecord[] = result.participants.map((row) => ({
-      ...row,
-      profiles: { display_name: memberById.get(row.user_id)?.display_name ?? "—" },
-    }));
-    setDetails((current) => current && current.item.id === item.id ? { ...current, participants: nextParticipants } : current);
-    setAssignments(buildAssignments(nextParticipants));
-    setMessage("تم حفظ تعيينات الفريق.");
-    onChanged?.();
+  async function refreshAssignmentsAfterConflict(targetItemId: string, showConflictNotice = true) {
+    setAssignmentConflict("refreshing");
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), detailTimeoutMs);
+    try {
+      const response = await fetch(`/api/item-details?itemId=${encodeURIComponent(targetItemId)}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
+      const payload = (await response.json().catch(() => ({}))) as ItemDetailsResponse;
+      if (!response.ok || "error" in payload || payload.details.item.id !== targetItemId) throw new Error("ASSIGNMENTS_REFRESH_FAILED");
+      if (latestItemRef.current?.id !== targetItemId) return;
+
+      setDetails((current) => current && current.item.id === targetItemId ? {
+        ...current,
+        item: payload.details.item,
+        participants: payload.details.participants,
+        assignmentRevision: payload.details.assignmentRevision,
+      } : current);
+      setAssignmentEditor((current) => hydrateItemAssignments(current, targetItemId, payload.details.participants, payload.details.assignmentRevision));
+      setAssignmentConflict(showConflictNotice ? "ready" : null);
+    } catch {
+      if (latestItemRef.current?.id !== targetItemId) return;
+      setAssignmentConflict("error");
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   async function createTrackForDrawer() {
@@ -770,13 +880,15 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   async function markPublished() {
-    if (!item || !publishPermalink.trim()) return;
-    const { error } = await supabase.rpc("mark_published", {
+    if (!item || !isInstagramPermalink(publishPermalink)) return;
+    const result = await executeInstagramPublish(publishPermalink, (permalink) => supabase.rpc("mark_published", {
       p_item: item.id,
-      p_permalink: publishPermalink.trim(),
+      p_permalink: permalink,
       p_at: undefined,
       p_override_reason: undefined,
-    });
+    }));
+    if (!result.started) return;
+    const { error } = result.value;
     if (error) {
       setMessage(parseRuleMessage(extractMessage(error)));
       return;
@@ -817,11 +929,13 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const showDetailsLoading = loadState === "loading";
   const retryButton = loadState === "error" ? <button className="button button-secondary" type="button" onClick={() => setRetryNonce((current) => current + 1)}>إعادة المحاولة</button> : null;
   const actionDisabled = isPending || actionBusy;
+  const assignmentControlsDisabled = itemAssignmentControlsDisabled(assignmentControlState);
+  const assignmentSaveEnabled = Boolean(itemId && itemAssignmentSaveEnabled(assignmentEditor, itemId, canSubmitAssignments, assignmentControlState));
 
   return (
     <div className="veil" onClick={handleClose}>
-      <aside className="drawer" onClick={(event) => event.stopPropagation()} aria-label="بطاقة المادة">
-        <button className="icon-button drawer-close" type="button" onClick={handleClose} aria-label="إغلاق">×</button>
+      <aside aria-labelledby="item-drawer-title" aria-modal="true" aria-busy={actionDisabled || undefined} className="drawer" onClick={(event) => event.stopPropagation()} ref={drawerRef} role="dialog" tabIndex={-1}>
+        <button className="icon-button drawer-close" type="button" disabled={actionDisabled || trackSaving} onClick={handleClose} aria-label="إغلاق">×</button>
         {!displayItem ? (
           <div className="drawer-stack">
             {showDetailsLoading ? <p>جارٍ التحميل...</p> : null}
@@ -831,7 +945,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
           <div className="drawer-stack">
             <header className="drawer-head">
               <span className="num ref-pill">{displayItem.ref}</span>
-              <h2>{displayItem.title}</h2>
+              <h2 id="item-drawer-title">{displayItem.title}</h2>
               <div className="pill-row">
                 <span className="pill status-pill">{workflowLabel(displayItem.status)}</span>
                 {trackName ? <span className="pill track-pill" style={trackStyle(trackColor)}>{trackName}</span> : null}
@@ -844,7 +958,8 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               </div>
             </header>
 
-            {message && !(isAdmin && failedAdvance) ? <p className="notice">{message}</p> : null}
+            {message && !(isAdmin && failedAdvance) ? <p className="notice" role="status">{message}</p> : null}
+            {actionBusy ? <p className="muted" role="status">جارٍ تنفيذ الإجراء...</p> : null}
             {showDetailsLoading ? <p className="muted">جارٍ تحميل التفاصيل والإجراءات...</p> : null}
             {loadError ? <div className="notice stack" role="alert"><p>{loadError}</p>{retryButton}</div> : null}
 
@@ -855,17 +970,30 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
               </section>
             ) : null}
 
-            {item && canEditAssignments ? (
-              <details className="drawer-section accordion">
+            {isAdmin && teamMembersLoadError ? (
+              <section className="notice stack" role="alert">
+                <p>{teamMembersLoadError}</p>
+                {onRetryTeamMembers ? <button className="button button-secondary" type="button" disabled={retryingTeamMembers || actionDisabled} onClick={() => { void onRetryTeamMembers(); }}>{retryingTeamMembers ? "جارٍ تحميل أعضاء الفريق..." : "إعادة تحميل أعضاء الفريق"}</button> : null}
+              </section>
+            ) : null}
+
+            {canEditAssignments ? (
+              <details className="drawer-section accordion" open={assignmentSectionOpen} onToggle={(event) => setAssignmentSectionOpen(event.currentTarget.open)}>
                 <summary>تعيينات الفريق</summary>
                 <div className="accordion-body stack">
                 <p className="muted">هذا القسم للأدمن فقط؛ الحفظ يراجع أدوار الحسابات النشطة داخل قاعدة البيانات.</p>
+                {!assignmentItemReady && loadState !== "error" ? <p className="muted" role="status">جارٍ تحميل التعيينات... ستتاح الحقول بعد اكتمال التحميل.</p> : null}
+                {assignmentsHydrated && teamAvailability === "empty" ? <p className="muted">لا يوجد أعضاء فريق نشطون متاحون للتعيين.</p> : null}
+                {multiplyAssignedParts.length ? <p className="notice" role="alert">تتضمن هذه المادة أكثر من مكلّف في دور {multiplyAssignedParts.map((part) => assignmentPartLabels[part]).join("، ")}. لا يمكن تعديل التعيينات بأمان من واجهة التعيين الفردي الحالية.</p> : null}
+                {assignmentConflict === "refreshing" ? <p className="muted" role="status">جارٍ تحديث تعيينات الفريق...</p> : null}
+                {assignmentConflict === "ready" ? <div className="notice stack" role="alert"><p>تغيّرت تعيينات الفريق منذ فتح البطاقة. حُدّثت الأدوار الأخرى مع الاحتفاظ بتعديلك المحلي. راجعها ثم أعد الحفظ.</p><button className="button button-secondary" type="button" disabled={!assignmentSaveEnabled} onClick={() => runAction(saveAssignments)}>إعادة محاولة حفظ التعيينات</button></div> : null}
+                {assignmentConflict === "error" ? <div className="notice stack" role="alert"><p>تغيّرت تعيينات الفريق، وتعذر تحميل أحدث القيم. حدّث التعيينات قبل إعادة الحفظ.</p><button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => itemId && runAction(() => refreshAssignmentsAfterConflict(itemId))}>تحديث التعيينات</button></div> : null}
                 <div className="form-grid">
-                  <label className="field">الكاتب المسؤول<select className="input" required value={assignments.writer_id} onChange={(event) => setAssignments((current) => ({ ...current, writer_id: event.target.value }))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
-                  <label className="field">المنتج المسؤول<select className="input" value={assignments.producer_id} onChange={(event) => setAssignments((current) => ({ ...current, producer_id: event.target.value }))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                  <label className="field">الكاتب المسؤول<select className="input" required disabled={assignmentControlsDisabled} value={assignments.writer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "writer_id", event.target.value, canEditAssignments))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                  <label className="field">المنتج المسؤول<select className="input" disabled={assignmentControlsDisabled} value={assignments.producer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "producer_id", event.target.value, canEditAssignments))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
                 </div>
-                <label className="field">المراجع المسؤول<select className="input" value={assignments.reviewer_id} onChange={(event) => setAssignments((current) => ({ ...current, reviewer_id: event.target.value }))}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
-                <button className="button button-secondary" type="button" disabled={!assignments.writer_id || actionDisabled} onClick={() => runAction(saveAssignments)}>حفظ التعيينات</button>
+                <label className="field">المراجع المسؤول<select className="input" disabled={assignmentControlsDisabled} value={assignments.reviewer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "reviewer_id", event.target.value, canEditAssignments))}><option value="">—</option>{reviewers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
+                <button className="button button-secondary" type="button" disabled={!assignmentSaveEnabled} onClick={() => runAction(saveAssignments)}>حفظ التعيينات</button>
                 </div>
               </details>
             ) : null}
@@ -1033,7 +1161,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                   </>
                 ) : item.status === "in_production" ? <p className="muted">{isProducer ? "بانتظار مراجع." : "بانتظار الإنتاج والمراجعة."}</p> : null}
                 {item.status === "design_approved" && permissions.canMoveReady ? <button className="button" type="button" disabled={actionDisabled} onClick={() => runAction(() => advance("ready"))}>جاهزة للنشر</button> : null}
-                {item.status === "ready" && permissions.canMarkPublished ? <><label className="field">رابط منشور إنستغرام<input className="input" inputMode="url" placeholder="https://www.instagram.com/p/..." value={publishPermalink} onChange={(event) => setPublishPermalink(event.target.value)} /></label><button className="button" type="button" disabled={!safeHttpsHref(publishPermalink) || actionDisabled} onClick={() => runAction(markPublished)}>تم النشر</button></> : item.status === "ready" ? <p className="muted">بانتظار مسؤول النشر.</p> : null}
+                {item.status === "ready" && permissions.canMarkPublished ? <><label className="field">رابط منشور إنستغرام<input className="input" inputMode="url" placeholder="https://www.instagram.com/p/..." value={publishPermalink} onChange={(event) => setPublishPermalink(event.target.value)} /></label><button className="button" type="button" disabled={!isInstagramPermalink(publishPermalink) || actionDisabled} onClick={() => runAction(markPublished)}>تم النشر</button></> : item.status === "ready" ? <p className="muted">بانتظار مسؤول النشر.</p> : null}
                 {isAdmin && failedAdvance ? (
                   <div className="override-box">
                     <p className="eyebrow">تجاوز إداري</p>

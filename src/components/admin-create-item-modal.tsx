@@ -12,6 +12,9 @@ type Props = {
   onCreated: (item: AdminCreatedItem, message: string) => void;
   slots: BoardSlot[];
   teamMembers: TeamMemberOption[];
+  teamMembersLoadError?: string | null;
+  onRetryTeamMembers?: () => void | Promise<void>;
+  retryingTeamMembers?: boolean;
 };
 
 type FormState = {
@@ -68,7 +71,7 @@ function membersByRole(teamMembers: TeamMemberOption[], role: "writer" | "produc
     .sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
 }
 
-export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMembers }: Props) {
+export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMembers, teamMembersLoadError = null, onRetryTeamMembers, retryingTeamMembers = false }: Props) {
   const { tracks, ideaTypes, partners, refreshReferenceData } = useReferenceData();
   const panelRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -184,8 +187,8 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
         credentials: "same-origin",
         body: JSON.stringify(payload),
       });
-      const result = (await response.json().catch(() => ({}))) as { item?: AdminCreatedItem; error?: string };
-      if (!response.ok || !result.item) {
+      const result = (await response.json().catch(() => ({}))) as { item?: AdminCreatedItem; assignmentRevision?: string; error?: string };
+      if (!response.ok || !result.item || !result.assignmentRevision) {
         setMessage(result.error ?? "تعذر إنشاء المادة. رمز التشخيص: ITEM_CREATE_UI.");
         return;
       }
@@ -200,6 +203,7 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
             writer_id: form.writer_id.trim(),
             ...(form.producer_id.trim() ? { producer_id: form.producer_id.trim() } : {}),
             ...(form.reviewer_id.trim() ? { reviewer_id: form.reviewer_id.trim() } : {}),
+            expected_revision: result.assignmentRevision,
           }),
         });
         if (!assignments.ok) {
@@ -240,6 +244,12 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
         </header>
 
         {message ? <p className="notice" role="status">{message}</p> : null}
+        {teamMembersLoadError ? (
+          <section className="notice stack" role="alert">
+            <p>{teamMembersLoadError}</p>
+            {onRetryTeamMembers ? <button className="button button-secondary" type="button" disabled={retryingTeamMembers || savingItem || savingTrack} onClick={() => { void onRetryTeamMembers(); }}>{retryingTeamMembers ? "جارٍ تحميل أعضاء الفريق..." : "إعادة تحميل أعضاء الفريق"}</button> : null}
+          </section>
+        ) : null}
 
         <form className="stack" onSubmit={submit}>
           <label className="field">العنوان<input className="input" required value={form.title} onChange={(event) => patchForm({ title: event.target.value })} /></label>

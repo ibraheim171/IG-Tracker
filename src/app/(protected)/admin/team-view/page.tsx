@@ -1,9 +1,10 @@
 import { TeamView } from "@/components/team-view";
+import { activeTeamMemberOptions, resolveTeamViewTeamState, teamMembersLoadError } from "@/lib/admin-team-members";
+import { listAdminUsers } from "@/lib/admin-users-server";
 import { requireAdmin } from "@/lib/auth";
 import { buildMyMaterials, participantItemsSelect, type ParticipantItemRow } from "@/lib/my-materials-data";
 import { createClient } from "@/lib/supabase/server";
 import type { MyMaterial } from "@/lib/ui-data";
-import type { TeamMemberOption } from "@/components/team-member-picker";
 
 type SearchParams = Promise<{ member?: string | string[] }>;
 
@@ -21,27 +22,18 @@ export default async function TeamViewPage({ searchParams }: { searchParams: Sea
   const rawMemberId = firstSearchValue(params.member);
   const requestedMemberId = rawMemberId && uuidPattern.test(rawMemberId) ? rawMemberId : null;
 
-  const { data: profileRows, error: profilesError } = await supabase
-    .from("profiles")
-    .select("id, display_name, roles, active")
-    .order("active", { ascending: false })
-    .order("display_name", { ascending: true });
-
-  const members = (profileRows ?? []) as unknown as TeamMemberOption[];
-  const selectedMember = requestedMemberId ? members.find((member) => member.id === requestedMemberId) ?? null : null;
-  const invalidMessage = profilesError
-    ? "تعذر تحميل أعضاء الفريق. حاول مجددًا."
-    : rawMemberId && !selectedMember
-      ? "تعذر العثور على العضو المطلوب. اختر عضوًا من القائمة."
-      : null;
+  const adminUsersResult = await listAdminUsers()
+    .then((users) => ({ users, error: null }))
+    .catch(() => ({ users: [], error: teamMembersLoadError }));
+  const teamState = resolveTeamViewTeamState(adminUsersResult.users, adminUsersResult.error, rawMemberId, requestedMemberId);
 
   let materials: MyMaterial[] = [];
   let materialsError: string | null = null;
-  if (selectedMember) {
+  if (teamState.canLoadMaterials && teamState.selectedMember) {
     const { data: participantRows, error: participantRowsError } = await supabase
       .from("item_participants")
       .select(participantItemsSelect)
-      .eq("user_id", selectedMember.id);
+      .eq("user_id", teamState.selectedMember.id);
 
     if (participantRowsError) {
       materialsError = materialsLoadError;
@@ -52,13 +44,16 @@ export default async function TeamViewPage({ searchParams }: { searchParams: Sea
 
   return (
     <TeamView
-      members={members}
-      selectedMember={selectedMember}
-      invalidMessage={invalidMessage}
+      members={teamState.members}
+      selectedMember={teamState.selectedMember}
+      invalidMessage={teamState.invalidMessage}
+      membersAvailability={teamState.availability}
       materialsError={materialsError}
       materials={materials}
       currentUserId={adminProfile.id}
       roles={adminProfile.roles}
+      assignmentTeamMembers={activeTeamMemberOptions(adminUsersResult.users)}
+      assignmentTeamMembersLoadError={adminUsersResult.error}
     />
   );
 }

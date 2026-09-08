@@ -11,7 +11,14 @@
     "test:restrict-writer-item-fields": "node --test src/lib/restrict-writer-item-fields.test.ts",
     "test:admin-reassign-tasks": "node --test src/lib/admin-reassign-tasks.test.ts",
     "test:admin-create-item": "node --test src/lib/admin-create-item.test.ts",
-    "test:workflow-ui": "node --test src/lib/workflow-ui.test.ts"
+    "test:workflow-ui": "node --test src/lib/workflow-ui.test.ts",
+    "test:operational-ui": "node --test src/lib/operational-ui.test.ts",
+    "test:dialog-focus": "node --test src/lib/dialog-focus.test.ts",
+    "test:admin-team-members": "node --test src/lib/admin-team-members.test.ts",
+    "test:ready-publish-dialog": "node --test src/lib/ready-publish-dialog.test.ts",
+    "test:item-assignment-editor": "node --test src/lib/item-assignment-editor.test.ts",
+    "test:item-assignment-concurrency": "node --test src/lib/item-assignment-concurrency.test.ts",
+    "test": "pnpm run test:admin-users && pnpm run test:item-permissions && pnpm run test:restrict-writer-item-fields && pnpm run test:admin-reassign-tasks && pnpm run test:admin-create-item && pnpm run test:workflow-ui && pnpm run test:operational-ui && pnpm run test:dialog-focus && pnpm run test:admin-team-members && pnpm run test:ready-publish-dialog && pnpm run test:item-assignment-editor && pnpm run test:item-assignment-concurrency"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

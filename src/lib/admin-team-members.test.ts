@@ -1,0 +1,86 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { fetchAdminTeamMembers, resolveTeamViewTeamState, teamMembersAvailability, teamMembersForRole, teamMembersLoadError } from "./admin-team-members.ts";
+
+test("يفصل فشل تحميل أعضاء الفريق عن القائمة الفارغة ويقبل إعادة المحاولة", async () => {
+  let calls = 0;
+  const fetcher = async () => {
+    calls += 1;
+    if (calls === 1) return { ok: false, json: async () => ({ error: "تعذر التحميل" }) };
+    return {
+      ok: true,
+      json: async () => ({
+        users: [
+          { id: "active", display_name: "عضو نشط", email: "active@example.test", roles: ["writer"], active: true, must_change_password: false },
+          { id: "inactive", display_name: "عضو معطل", email: "inactive@example.test", roles: ["writer"], active: false, must_change_password: false },
+        ],
+      }),
+    };
+  };
+
+  const failed = await fetchAdminTeamMembers(fetcher);
+  assert.deepEqual(failed, { teamMembers: [], error: teamMembersLoadError });
+  assert.equal(teamMembersAvailability(failed.teamMembers, failed.error, false), "error");
+  assert.equal(teamMembersAvailability(failed.teamMembers, failed.error, true), "loading");
+
+  const retried = await fetchAdminTeamMembers(fetcher);
+  assert.deepEqual(retried, {
+    teamMembers: [{ id: "active", display_name: "عضو نشط", email: "active@example.test", roles: ["writer"] }],
+    error: null,
+  });
+  assert.equal(teamMembersAvailability(retried.teamMembers, retried.error, false), "ready");
+});
+
+test("يبقى غياب أعضاء الفريق الفعلي مختلفًا عن تعذر التحميل", async () => {
+  const result = await fetchAdminTeamMembers(async () => ({ ok: true, json: async () => ({ users: [] }) }));
+  assert.deepEqual(result, { teamMembers: [], error: null });
+  assert.equal(teamMembersAvailability(result.teamMembers, result.error, false), "empty");
+});
+
+test("تعرض محددات الدرج أعضاء الفريق النشطين بحسب الدور", async () => {
+  const result = await fetchAdminTeamMembers(async () => ({
+    ok: true,
+    json: async () => ({
+      users: [
+        { id: "multi-role", display_name: "عضو متعدد", email: "multi@example.test", roles: ["writer", "producer", "reviewer"], active: true, must_change_password: false },
+      ],
+    }),
+  }));
+
+  assert.equal(teamMembersForRole(result.teamMembers, "writer")[0]?.id, "multi-role");
+  assert.equal(teamMembersForRole(result.teamMembers, "producer")[0]?.id, "multi-role");
+  assert.equal(teamMembersForRole(result.teamMembers, "reviewer")[0]?.id, "multi-role");
+});
+
+test("تعيد محاولة عرض الفريق بناء قائمة الأعضاء وتزيل الفشل وتستعيد العضو المطلوب", () => {
+  const requestedMemberId = "11111111-1111-4111-8111-111111111111";
+  const failed = resolveTeamViewTeamState([], teamMembersLoadError, requestedMemberId, requestedMemberId);
+  assert.equal(failed.availability, "error");
+  assert.deepEqual(failed.members, []);
+  assert.equal(failed.selectedMember, null);
+  assert.match(failed.invalidMessage ?? "", /تعذر تحميل أعضاء الفريق/);
+  assert.equal(failed.canLoadMaterials, false);
+
+  const retried = resolveTeamViewTeamState([{
+    id: requestedMemberId,
+    display_name: "عضو الفريق",
+    email: "member@example.test",
+    roles: ["producer"],
+    active: true,
+    must_change_password: false,
+  }], null, requestedMemberId, requestedMemberId);
+  assert.equal(retried.members[0]?.id, requestedMemberId);
+  assert.equal(retried.availability, "ready");
+  assert.equal(retried.selectedMember?.id, requestedMemberId);
+  assert.equal(retried.invalidMessage, null);
+  assert.equal(retried.canLoadMaterials, true);
+});
+
+test("يعرض عرض الفريق حالة الفراغ الحقيقية دون محدد عضو زائف", () => {
+  const empty = resolveTeamViewTeamState([], null, null, null);
+  assert.equal(empty.availability, "empty");
+  assert.deepEqual(empty.members, []);
+  assert.equal(empty.selectedMember, null);
+  assert.equal(empty.invalidMessage, null);
+  assert.equal(empty.canLoadMaterials, false);
+});

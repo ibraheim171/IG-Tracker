@@ -7,12 +7,19 @@ import { buildMyMaterials, type ParticipantItemRow } from "./my-materials-data.t
 const creationMigration = readFileSync("supabase/migrations/20260903071931_admin_create_items_tracks.sql", "utf8");
 const roleMigration = readFileSync("supabase/migrations/20260903011558_role_field_permissions.sql", "utf8");
 const draftWorkflowMigration = readFileSync("supabase/migrations/20260904214834_draft_workflow_ux.sql", "utf8");
+const assignmentConcurrencyMigration = readFileSync("supabase/migrations/20260908094853_assignment_optimistic_concurrency.sql", "utf8");
 const createItemRoute = readFileSync("src/app/api/admin/items/route.ts", "utf8");
 const createTrackRoute = readFileSync("src/app/api/admin/tracks/route.ts", "utf8");
 const assignmentsRoute = readFileSync("src/app/api/admin/items/[itemId]/participants/route.ts", "utf8");
 const slotsBoard = readFileSync("src/components/slots-board.tsx", "utf8");
 const createModal = readFileSync("src/components/admin-create-item-modal.tsx", "utf8");
 const itemDrawer = readFileSync("src/components/item-drawer.tsx", "utf8");
+const myMaterials = readFileSync("src/components/my-materials.tsx", "utf8");
+const waitingBoard = readFileSync("src/components/waiting-board.tsx", "utf8");
+const teamView = readFileSync("src/components/team-view.tsx", "utf8");
+const myPage = readFileSync("src/app/(protected)/my/page.tsx", "utf8");
+const waitingPage = readFileSync("src/app/(protected)/waiting/page.tsx", "utf8");
+const teamViewPage = readFileSync("src/app/(protected)/admin/team-view/page.tsx", "utf8");
 const globalsCss = readFileSync("src/app/globals.css", "utf8");
 const rootLayout = readFileSync("src/app/layout.tsx", "utf8");
 
@@ -200,27 +207,62 @@ test("admin item creation starts from idea and atomically creates participants, 
   assert.equal(/exception\s+when\s+others/i.test(creationMigration), false);
 });
 
-test("admin assignment edit RPC replaces operational assignments through trusted DB code only", () => {
-  assert.match(creationMigration, /create or replace function public\.admin_save_item_assignments/);
-  assert.match(creationMigration, /if not public\.is_admin\(\) then/);
-  assert.match(creationMigration, /select \* into it from public\.items where id = p_item for update/);
-  assert.match(creationMigration, /if it\.is_archived then raise exception 'ARCHIVED_IMMUTABLE:/);
-  assert.match(creationMigration, /if it\.status = 'published' then raise exception 'PUBLISHED_IMMUTABLE:/);
-  assert.match(creationMigration, /if it\.status = 'cancelled' then raise exception 'CANCELLED_IMMUTABLE:/);
-  assert.match(creationMigration, /where id in \(p_writer, p_producer, p_reviewer\)[\s\S]*order by id[\s\S]*for update/);
-  assert.match(creationMigration, /from public\.item_participants[\s\S]*for update/);
-  assert.match(creationMigration, /delete from public\.item_participants[\s\S]*part in \('writer', 'producer', 'reviewer'\)/);
-  assert.match(creationMigration, /on conflict \(item_id, user_id, part\) do nothing/);
+test("current admin assignment RPC replaces the old signature and guards every participant write", () => {
+  assert.match(assignmentConcurrencyMigration, /drop function public\.admin_save_item_assignments\(uuid, uuid, uuid, uuid\)/);
+  assert.match(assignmentConcurrencyMigration, /create function public\.admin_save_item_assignments\([\s\S]*p_item uuid[\s\S]*p_writer uuid[\s\S]*p_expected_revision text[\s\S]*p_producer uuid[\s\S]*p_reviewer uuid/);
+  assert.match(assignmentConcurrencyMigration, /if not public\.is_admin\(\) then/);
+  assert.match(assignmentConcurrencyMigration, /select \* into it from public\.items where id = p_item for update/);
+  assert.match(assignmentConcurrencyMigration, /if it\.is_archived then raise exception 'ARCHIVED_IMMUTABLE:/);
+  assert.match(assignmentConcurrencyMigration, /if it\.status = 'published' then raise exception 'PUBLISHED_IMMUTABLE:/);
+  assert.match(assignmentConcurrencyMigration, /if it\.status = 'cancelled' then raise exception 'CANCELLED_IMMUTABLE:/);
+  assert.match(assignmentConcurrencyMigration, /where id in \(p_writer, p_producer, p_reviewer\)[\s\S]*order by id[\s\S]*for update/);
+  assert.match(assignmentConcurrencyMigration, /from public\.item_participants[\s\S]*for update/);
+
+  const staleGuard = assignmentConcurrencyMigration.indexOf("if current_revision <> expected_revision then");
+  const multiGuard = assignmentConcurrencyMigration.indexOf("if exists (", staleGuard);
+  const firstDelete = assignmentConcurrencyMigration.indexOf("delete from public.item_participants");
+  const firstInsert = assignmentConcurrencyMigration.indexOf("insert into public.item_participants");
+  assert.ok(staleGuard > 0 && multiGuard > staleGuard);
+  assert.ok(firstDelete > multiGuard);
+  assert.ok(firstInsert > firstDelete);
+  assert.match(assignmentConcurrencyMigration, /delete from public\.item_participants[\s\S]*part in \('writer', 'producer', 'reviewer'\)/);
+  assert.match(assignmentConcurrencyMigration, /on conflict \(item_id, user_id, part\) do nothing/);
 });
 
-test("shared assignment edit logic and UI hide editor for historical item states", () => {
+test("shared assignment edit logic hides historical items while drawer hydration keeps active editor mounted", () => {
   assert.equal(canEditItemAssignments({ status: "idea", is_archived: false }), true);
   assert.equal(canEditItemAssignments({ status: "ready", is_archived: false }), true);
   assert.equal(canEditItemAssignments({ status: "published", is_archived: false }), false);
   assert.equal(canEditItemAssignments({ status: "cancelled", is_archived: false }), false);
   assert.equal(canEditItemAssignments({ status: "idea", is_archived: true }), false);
-  assert.match(itemDrawer, /canEditItemAssignments\(item\)/);
-  assert.match(itemDrawer, /item && canEditAssignments/);
+  assert.match(itemDrawer, /canShowItemAssignmentEditor\(isAdmin, assignmentDisplayState\)/);
+  assert.match(itemDrawer, /canShowItemAssignmentEditor\(isAdmin, item\)/);
+  assert.match(itemDrawer, /\{canEditAssignments \? \(/);
+});
+
+test("all shared drawer entry points supply admin-only team state and retry controls", () => {
+  for (const source of [myMaterials, waitingBoard]) {
+    assert.match(source, /teamMembers=\{teamMembers\}/);
+    assert.match(source, /teamMembersLoadError=\{teamMembersError\}/);
+    assert.match(source, /onRetryTeamMembers=\{retryTeamMembers\}/);
+    assert.match(source, /if \(!isAdmin \|\| retryingTeamMembers\) return/);
+  }
+  for (const source of [myPage, waitingPage]) {
+    assert.match(source, /isAdmin[\s\S]*\? listAdminUsers\(\)/);
+    assert.match(source, /: Promise\.resolve\(\{ users: \[\], error: null \}\)/);
+  }
+  assert.match(teamView, /teamMembers=\{assignmentTeamMembers\}/);
+  assert.match(teamView, /teamMembersLoadError=\{assignmentTeamMembersLoadError\}/);
+  assert.match(teamView, /startTeamMembersRetry\(\(\) => router\.refresh\(\)\)/);
+  assert.match(teamView, /onRetryTeamMembers=\{retryTeamMembers\}/);
+  assert.match(teamView, /retryingTeamMembers=\{retryingTeamMembers\}/);
+  assert.match(teamView, /membersAvailability === "ready" \? <TeamMemberPicker/);
+  assert.match(teamView, /membersAvailability === "empty" \? <p className="muted" role="status">لا يوجد أعضاء فريق متاحون\.<\/p>/);
+  assert.match(teamView, /!invalidMessage && membersAvailability === "ready"/);
+  assert.match(teamViewPage, /await requireAdmin\(\)/);
+  assert.match(teamViewPage, /listAdminUsers\(\)/);
+  assert.match(teamViewPage, /assignmentTeamMembers=\{activeTeamMemberOptions\(adminUsersResult\.users\)\}/);
+  assert.match(teamViewPage, /assignmentTeamMembersLoadError=\{adminUsersResult\.error\}/);
 });
 
 test("create and assignment routes are same-origin admin-only RPC wrappers without service role or direct writes", () => {
@@ -232,8 +274,12 @@ test("create and assignment routes are same-origin admin-only RPC wrappers witho
     assert.equal(/from\("(items|item_participants|tracks)"\)\.(insert|update|delete|upsert)/.test(source), false);
   }
   assert.match(createItemRoute, /rpc\("admin_create_item"/);
+  assert.match(createItemRoute, /from\("item_participants"\)[\s\S]*resolveLoadedItemAssignmentRevision/);
+  assert.doesNotMatch(createItemRoute, /itemAssignmentRevision\(\[\]\)/);
   assert.match(createTrackRoute, /rpc\("admin_create_track"/);
   assert.match(assignmentsRoute, /rpc\("admin_save_item_assignments"/);
+  assert.match(assignmentsRoute, /p_expected_revision: body\.value\.expectedRevision/);
+  assert.match(assignmentConcurrencyMigration, /if not public\.is_admin\(\) then/);
   assert.match(assignmentsRoute, /PUBLISHED_IMMUTABLE|safeRpcError/);
   for (const field of ["status", "writer_id", "producer_id", "reviewer_id"]) {
     assert.equal(validateAdminCreateItemPayload({ title: "فكرة", [field]: field === "status" ? "idea" : uuidA }).ok, false, `${field} direct API payload must fail`);
@@ -248,6 +294,7 @@ test("draft creation is atomic, prevents duplicate clicks, assigns separately, a
   assert.match(createModal, /disabled=\{!canSubmit\}/);
   assert.match(createModal, /\/participants`, \{/);
   assert.match(createModal, /writer_id: form\.writer_id\.trim\(\)/);
+  assert.match(createModal, /expected_revision: result\.assignmentRevision/);
   assert.match(createModal, /تم إنشاء المسودة، لكن تعذر تعيين مسؤول الإعداد/);
   assert.match(slotsBoard, /setCreateMessage\(message\)/);
   assert.match(slotsBoard, /router\.refresh\(\)/);
