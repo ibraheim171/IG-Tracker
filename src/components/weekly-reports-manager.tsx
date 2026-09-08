@@ -6,7 +6,7 @@ import { weeklyReportMaxBytes } from "@/lib/weekly-reports";
 
 type Report = {
   id: string; title: string; period_start: string; period_end: string; original_filename: string;
-  content_sha256: string; byte_size: number; created_at: string;
+  content_sha256: string; byte_size: number; created_at: string; published_at: string | null;
 };
 type ListState = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; reports: Report[] };
 
@@ -18,6 +18,7 @@ export function WeeklyReportsManager() {
   const defaultRange = currentWeekRange();
   const fileRef = useRef<HTMLInputElement>(null);
   const uploadingRef = useRef(false);
+  const mutationRef = useRef(false);
   const [state, setState] = useState<ListState>({ kind: "loading" });
   const [retry, setRetry] = useState(0);
   const [title, setTitle] = useState("");
@@ -27,6 +28,10 @@ export function WeeklyReportsManager() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [selected, setSelected] = useState<Report | null>(null);
+  const [editing, setEditing] = useState<Report | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editStart, setEditStart] = useState("");
+  const [editEnd, setEditEnd] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -71,6 +76,55 @@ export function WeeklyReportsManager() {
     }
   }
 
+  async function mutateReport(report: Report, action: "publish" | "unpublish" | "delete") {
+    if (busy || mutationRef.current) return;
+    if (action === "delete" && !window.confirm(`حذف التقرير «${report.title}» نهائيًا؟`)) return;
+    mutationRef.current = true;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/admin/weekly-reports/${report.id}`, {
+        method: action === "delete" ? "DELETE" : "PATCH",
+        headers: action === "delete" ? undefined : { "Content-Type": "application/json" },
+        body: action === "delete" ? undefined : JSON.stringify({ action }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "تعذر تحديث التقرير.");
+      if (selected?.id === report.id && (action === "delete" || action === "unpublish")) setSelected(null);
+      setRetry((value) => value + 1);
+      setMessage(action === "publish" ? "تم نشر التقرير للفريق." : action === "unpublish" ? "أعيد التقرير إلى المسودات." : "تم حذف التقرير.");
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "تعذر تحديث التقرير.");
+    } finally {
+      mutationRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  function beginEdit(report: Report) {
+    setEditing(report);
+    setEditTitle(report.title);
+    setEditStart(report.period_start);
+    setEditEnd(report.period_end);
+  }
+
+  async function saveMetadata(event: React.FormEvent) {
+    event.preventDefault();
+    if (!editing || busy || mutationRef.current) return;
+    mutationRef.current = true;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/admin/weekly-reports/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: editTitle, period_start: editStart, period_end: editEnd }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "تعذر حفظ بيانات التقرير.");
+      setEditing(null);
+      setRetry((value) => value + 1);
+      setMessage("تم تحديث بيانات التقرير.");
+    } catch (caught) { setMessage(caught instanceof Error ? caught.message : "تعذر حفظ بيانات التقرير."); }
+    finally { mutationRef.current = false; setBusy(false); }
+  }
+
   return <main className="page wide-page stack">
     <header className="screen-head"><div><p className="eyebrow">للمدير فقط</p><h1>التقارير الأسبوعية</h1></div></header>
     <form className="card report-upload-form" onSubmit={upload}>
@@ -88,8 +142,9 @@ export function WeeklyReportsManager() {
       {state.kind === "error" ? <div className="stack" role="alert"><p className="error">{state.message}</p><button className="button button-secondary" type="button" onClick={() => setRetry((value) => value + 1)}>إعادة المحاولة</button></div> : null}
       {state.kind === "ready" && state.reports.length === 0 ? <p className="muted">لا توجد تقارير أسبوعية محفوظة بعد.</p> : null}
       {state.kind === "ready" && state.reports.length > 0 ? <div className="report-list">{state.reports.map((report) => <article className="report-row" key={report.id}>
-        <div><h3>{report.title}</h3><p className="muted"><span className="num">{report.period_start}</span> – <span className="num">{report.period_end}</span></p><p className="muted">أُضيف في <span className="num">{latinDate(report.created_at)}</span> · <span className="num">{report.byte_size.toLocaleString("en-US")}</span> بايت</p></div>
-        <div className="actions-row"><button className="button button-secondary" type="button" onClick={() => setSelected(report)}>فتح داخل الموقع</button><a className="button report-download" href={`/api/admin/weekly-reports/${report.id}/download`}>تنزيل الملف الأصلي</a></div>
+        <div><h3>{report.title}</h3><p className="muted"><span className="num">{report.period_start}</span> – <span className="num">{report.period_end}</span></p><p className="muted">أُضيف في <span className="num">{latinDate(report.created_at)}</span> · <span className="num">{report.byte_size.toLocaleString("en-US")}</span> بايت · {report.published_at ? "منشور للفريق" : "مسودة للمدير"}</p></div>
+        <div className="actions-row"><button className="button button-secondary" type="button" disabled={busy} onClick={() => setSelected(report)}>فتح داخل الموقع</button><a className="button report-download" href={`/api/admin/weekly-reports/${report.id}/download`}>تنزيل الملف الأصلي</a><button className="button button-secondary" type="button" disabled={busy} onClick={() => beginEdit(report)}>تعديل البيانات</button><button className="button" type="button" disabled={busy} onClick={() => mutateReport(report, report.published_at ? "unpublish" : "publish")}>{report.published_at ? "إلغاء النشر" : "نشر للفريق"}</button><button className="button button-secondary" type="button" disabled={busy} onClick={() => mutateReport(report, "delete")}>حذف</button></div>
+        {editing?.id === report.id ? <form className="report-edit-grid" onSubmit={saveMetadata}><label className="field">العنوان<input className="input" required maxLength={160} disabled={busy} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label><label className="field">بداية الفترة<input className="input num" type="date" required disabled={busy} value={editStart} onChange={(event) => setEditStart(event.target.value)} /></label><label className="field">نهاية الفترة<input className="input num" type="date" required disabled={busy} value={editEnd} onChange={(event) => setEditEnd(event.target.value)} /></label><div className="actions-row"><button className="button" type="submit" disabled={busy}>حفظ البيانات</button><button className="button button-secondary" type="button" disabled={busy} onClick={() => setEditing(null)}>إلغاء</button></div></form> : null}
       </article>)}</div> : null}
     </section>
 

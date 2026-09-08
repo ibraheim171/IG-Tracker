@@ -50,7 +50,7 @@ function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon
   );
 }
 
-export function AppNavigation() {
+export function AppNavigation({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
@@ -76,8 +76,8 @@ export function AppNavigation() {
   const visualPathname = pendingHref ?? pathname;
 
   return (
-    <nav className="nav-links" aria-label="التنقل الرئيسي">
-      {navigationItems.map((item) => {
+    <nav className={`nav-links${isAdmin ? " nav-links-admin" : ""}`} aria-label="التنقل الرئيسي">
+      {navigationItems.filter((item) => item.href !== "/insights" || isAdmin).map((item) => {
         const isCurrent = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
         const isVisuallyActive = item.href === "/" ? visualPathname === "/" : visualPathname.startsWith(item.href);
         const isPending = pendingHref === item.href && !isCurrent;

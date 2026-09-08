@@ -206,7 +206,7 @@ textarea:focus-visible {
   inset-block-end: 0;
   z-index: 45;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.25rem;
   padding: 0.45rem 0.5rem max(0.45rem, env(safe-area-inset-bottom));
   background: color-mix(in srgb, var(--card) 96%, transparent);
@@ -381,8 +381,13 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .status-count-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
 .status-count-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-block-size: 44px; padding: 0.55rem 0.65rem; border: 1px solid var(--rule); border-radius: 0.5rem; }
 .partner-table { min-inline-size: 50rem; }
+.analytics-detail-table { min-inline-size: 120rem; }
+.analytics-link-row { display: grid; gap: 0.75rem; border-block-end: 1px solid var(--rule); padding-block: 0.75rem; }
+.analytics-link-row:last-child { border-block-end: 0; }
+.checkpoint-summary { display: grid; gap: 0.2rem; min-inline-size: 9rem; }
 .file-input { padding-block: 0.45rem; }
 .report-list { display: grid; gap: 0.75rem; }
+.report-edit-grid { display: grid; gap: 0.75rem; padding-block: 0.75rem; }
 .report-row { display: grid; gap: 0.75rem; padding-block-end: 0.75rem; border-block-end: 1px solid var(--rule); }
 .report-row:last-child { padding-block-end: 0; border-block-end: 0; }
 .report-row h3, .report-row p { margin: 0; }
@@ -513,13 +518,15 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
   .meta-grid, .form-grid, .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .reassign-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .drawer-partner-checks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .range-filter { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; }
+  .range-filter { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
   .insight-card-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .status-count-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .report-upload-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-title-field, .report-file-field, .report-upload-form > .notice, .report-upload-form > .error { grid-column: 1 / -1; }
   .report-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .report-edit-grid { grid-column: 1 / -1; }
 }
+.nav-links-admin { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
 @media (max-width: 30rem) {
   .page { padding: 1rem; }

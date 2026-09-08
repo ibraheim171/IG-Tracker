@@ -33,7 +33,71 @@ export type InsightsSnapshot = {
   partner_linked_materials: number;
   active_partners: number;
   partners: PartnerInsightRow[];
+  performance?: PerformanceDetail[];
+  aggregates?: PerformanceAggregate[];
+  partner_track_matrix?: PerformanceAggregate[];
+  account_daily?: AccountDailyInsight[];
+  demographics?: DemographicInsight[];
+  collabs?: CollabInsight[];
+  sync_runs?: SyncRunInsight[];
 };
+
+export type PerformanceDetail = {
+  id: string; ref: string; title: string; published_at: string; media_id: string; permalink: string;
+  media_type: string | null; product_type: string | null; snapshot_date: string; age_days: number | null;
+  source_timestamp: string | null; missing_metrics: string[]; signal_partial: boolean;
+  reach: number | null; views: number | null; likes: number | null; comments: number | null; saved: number | null;
+  shares: number | null; follows: number | null; profile_visits: number | null; interactions: number | null; avg_watch_ms: number | null;
+  save_rate: number | null; share_rate: number | null; follow_rate: number | null; visit_rate: number | null;
+  engagement_rate: number | null; signal: number | null; track_id: number | null; track_name: string | null;
+  idea_type_id: number | null; idea_type: string | null; checkpoints: Record<string, PostCheckpoint | null>;
+};
+export type PostCheckpoint = { age_days: number | null; snapshot_date: string; reach: number | null; saved: number | null; shares: number | null; signal: number | null };
+export type PerformanceAggregate = { dimension: "month" | "track" | "idea_type" | "partner" | "partner_track"; key: string; name: string; n: number; median_reach: number | null; median_save_rate: number | null; median_share_rate: number | null; median_signal: number | null; sample_sufficient: boolean };
+export type AccountDailyInsight = { date: string; followers: number | null; media_count: number | null; reach: number | null; views: number | null; reach_followers: number | null; reach_non_followers: number | null; follows: number | null; unfollows: number | null; missing_metrics: string[] };
+export type DemographicInsight = { snapshot_date: string; dimension: string; key: string; value: number | null };
+export type CollabInsight = { collaboration_date: string; partner: string; collaboration_type: string | null; follows_lift: number | null; reach_lift_pct: number | null; nonfollower_lift_pct: number | null };
+export type SyncRunInsight = { id: string; source_timestamp: string; received_at: string; status: string; row_counts: unknown; accepted_count: number; rejected_count: number };
+
+type AggregateRow = Pick<PerformanceDetail, "id" | "published_at" | "track_id" | "track_name" | "idea_type_id" | "idea_type" | "reach" | "save_rate" | "share_rate" | "signal">;
+
+export function buildPerformanceAggregates(rows: AggregateRow[], partnerLinks: Array<{ item_id: string; partner_id: number; partner_name: string }>) {
+  const groups = new Map<string, { dimension: PerformanceAggregate["dimension"]; key: string; name: string; rows: AggregateRow[] }>();
+  const add = (dimension: PerformanceAggregate["dimension"], key: string, name: string, row: AggregateRow) => {
+    const mapKey = `${dimension}:${key}`;
+    const group = groups.get(mapKey) ?? { dimension, key, name, rows: [] };
+    group.rows.push(row);
+    groups.set(mapKey, group);
+  };
+  for (const row of rows) {
+    add("month", row.published_at.slice(0, 7), row.published_at.slice(0, 7), row);
+    if (row.track_id !== null) add("track", String(row.track_id), row.track_name ?? "—", row);
+    if (row.idea_type_id !== null) add("idea_type", String(row.idea_type_id), row.idea_type ?? "—", row);
+    for (const partner of partnerLinks.filter((link) => link.item_id === row.id)) {
+      add("partner", String(partner.partner_id), partner.partner_name, row);
+      if (row.track_id !== null) add("partner_track", `${partner.partner_id}:${row.track_id}`, `${partner.partner_name} × ${row.track_name ?? "—"}`, row);
+    }
+  }
+  return [...groups.values()].map((group) => {
+    const n = group.rows.length;
+    const guarded = group.dimension === "partner_track" && n < 5;
+    return {
+      dimension: group.dimension, key: group.key, name: group.name, n,
+      median_reach: guarded ? null : medianValue(group.rows.map((row) => row.reach)),
+      median_save_rate: guarded ? null : medianValue(group.rows.map((row) => row.save_rate)),
+      median_share_rate: guarded ? null : medianValue(group.rows.map((row) => row.share_rate)),
+      median_signal: guarded ? null : medianValue(group.rows.map((row) => row.signal)),
+      sample_sufficient: group.dimension !== "partner_track" || n >= 5,
+    };
+  }).sort((a, b) => a.dimension.localeCompare(b.dimension) || b.n - a.n || a.name.localeCompare(b.name, "ar"));
+}
+
+function medianValue(values: Array<number | null>) {
+  const measured = values.filter((value): value is number => value !== null).sort((a, b) => a - b);
+  if (!measured.length) return null;
+  const middle = Math.floor(measured.length / 2);
+  return measured.length % 2 ? measured[middle] : (measured[middle - 1] + measured[middle]) / 2;
+}
 
 const statuses: Enums<"item_status">[] = ["idea", "writing", "content_approved", "in_production", "design_approved", "ready"];
 

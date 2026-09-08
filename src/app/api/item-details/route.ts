@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { itemAssignmentRevision } from "@/lib/item-assignment-revision";
 import type { Tables } from "@/lib/database.types";
 import { requireActiveRouteProfile } from "@/lib/route-auth";
+import { analyticsServiceClient } from "@/lib/analytics-server";
 
 type ItemRow = Tables<"items">;
 type PerformanceRow = Tables<"v_item_performance">;
@@ -88,12 +89,12 @@ export async function GET(request: NextRequest) {
 
     const item = itemResult.data;
     const currentSlotId = item.slot_id;
-    const shouldLoadPerformance = item.status === "published";
+    const shouldLoadPerformance = item.status === "published" && auth.profile.roles.includes("admin");
     const shouldLoadOpenSlots = item.status !== "published";
 
     const [performanceResult, slotsResult, currentSlotResult] = await Promise.all([
       shouldLoadPerformance
-        ? supabase.from("v_item_performance").select("*").eq("id", itemId).abortSignal(request.signal).maybeSingle()
+        ? analyticsServiceClient().from("v_item_performance").select("*").eq("id", itemId).abortSignal(request.signal).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
       shouldLoadOpenSlots
         ? supabase.from("v_slot_board").select("slot_id, slot_at, state, n_items").gte("slot_at", new Date().toISOString()).order("slot_at", { ascending: true }).limit(24).abortSignal(request.signal)

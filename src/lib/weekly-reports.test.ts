@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   canManageWeeklyReports,
+  canReadWeeklyReport,
+  classifyWeeklyReportBackendError,
   immutableWeeklyReportPath,
   isSameOriginAppRequest,
   publicWeeklyReport,
@@ -13,6 +15,8 @@ import {
   weeklyReportDownloadHeaders,
   weeklyReportMaxBytes,
   weeklyReportPreviewHeaders,
+  weeklyReportError,
+  visibleWeeklyReports,
 } from "./weekly-reports.ts";
 
 test("only an active admin passes the report authorization decision", () => {
@@ -20,6 +24,24 @@ test("only an active admin passes the report authorization decision", () => {
   assert.equal(canManageWeeklyReports({ active: true, roles: ["writer"] }), false);
   assert.equal(canManageWeeklyReports({ active: false, roles: ["admin"] }), false);
   assert.equal(canManageWeeklyReports(null), false);
+});
+
+test("report failures distinguish server configuration from transient storage/database access", () => {
+  assert.deepEqual(weeklyReportError(new Error("E_REPORT_CONFIG")), { status: 503, code: "E_REPORT_CONFIG", message: "خدمة التقارير غير مهيأة في هذه البيئة. تواصل مع مدير النظام." });
+  assert.equal(weeklyReportError(new Error("E_REPORT_LIST")).code, "E_REPORT_TEMPORARY");
+  assert.notEqual(weeklyReportError(new Error("E_REPORT_LIST")).message, weeklyReportError(new Error("E_REPORT_CONFIG")).message);
+  assert.equal(classifyWeeklyReportBackendError({ code: "42P01" }, "E_REPORT_LIST"), "E_REPORT_CONFIG");
+  assert.equal(classifyWeeklyReportBackendError({ code: "42501" }, "E_REPORT_LIST"), "E_REPORT_BACKEND_FORBIDDEN");
+  assert.equal(classifyWeeklyReportBackendError({ code: "08006" }, "E_REPORT_LIST"), "E_REPORT_LIST");
+});
+
+test("active team members can see published reports only while admins retain drafts", () => {
+  const reports = [{ id: "draft", published_at: null }, { id: "published", published_at: "2026-09-08T10:00:00Z" }];
+  assert.equal(canReadWeeklyReport({ active: true, roles: ["writer"] }, reports[1]), true);
+  assert.equal(canReadWeeklyReport({ active: true, roles: ["writer"] }, reports[0]), false);
+  assert.equal(canReadWeeklyReport({ active: false, roles: ["admin"] }, reports[1]), false);
+  assert.deepEqual(visibleWeeklyReports({ active: true, roles: ["writer"] }, reports).map((report) => report.id), ["published"]);
+  assert.deepEqual(visibleWeeklyReports({ active: true, roles: ["admin"] }, reports).map((report) => report.id), ["draft", "published"]);
 });
 
 test("same-origin enforcement validates Origin, Referer, or browser fetch metadata", () => {
@@ -67,7 +89,7 @@ test("checksum and immutable path are deterministic where expected and collision
 });
 
 test("public metadata never includes the private object path or uploader id", () => {
-  const report = publicWeeklyReport({ id: "r", title: "تقرير", storage_path: "private/path.html", uploaded_by: "admin" });
+  const report = publicWeeklyReport({ id: "r", title: "تقرير", storage_path: "private/path.html", uploaded_by: "admin", published_by: "admin-2" });
   assert.deepEqual(report, { id: "r", title: "تقرير" });
 });
 
@@ -100,4 +122,10 @@ test("migration, route, and iframe wiring retain the tested server-only security
   const client = readFileSync("src/components/weekly-reports-manager.tsx", "utf8");
   assert.match(client, /sandbox=""/);
   assert.doesNotMatch(client, /dangerouslySetInnerHTML|SUPABASE_SERVICE_ROLE_KEY/);
+  const lifecycleMigration = readFileSync("supabase/migrations/20260908164428_analytics_foundation.sql", "utf8");
+  assert.match(lifecycleMigration, /add column published_at timestamptz/i);
+  assert.match(lifecycleMigration, /grant select, insert, update, delete on table public\.weekly_reports to service_role/i);
+  const teamPreview = readFileSync("src/app/api/reports/[reportId]/preview/route.ts", "utf8");
+  assert.match(teamPreview, /assertWeeklyReportReadable/);
+  assert.match(readFileSync("src/components/weekly-reports-library.tsx", "utf8"), /sandbox=""/);
 });

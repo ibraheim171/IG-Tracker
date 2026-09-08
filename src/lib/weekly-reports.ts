@@ -1,6 +1,25 @@
 export const weeklyReportsBucket = "weekly-reports";
 export const weeklyReportMaxBytes = 2 * 1024 * 1024;
 
+export function weeklyReportError(caught: unknown) {
+  const code = caught instanceof Error ? caught.message : "E_REPORT";
+  if (code === "E_FILE_TOO_LARGE") return { status: 413, code, message: "يتجاوز الملف الحد الأقصى المسموح وهو 2 MiB." };
+  if (code === "E_EMPTY_FILE") return { status: 400, code, message: "ملف التقرير فارغ." };
+  if (code === "E_UTF8") return { status: 400, code, message: "يجب أن يكون ملف HTML بترميز UTF-8 صالح." };
+  if (code === "E_REPORT_NOT_FOUND") return { status: 404, code, message: "التقرير غير موجود." };
+  if (code === "E_REPORT_CONFIG") return { status: 503, code, message: "خدمة التقارير غير مهيأة في هذه البيئة. تواصل مع مدير النظام." };
+  if (code === "E_REPORT_BACKEND_FORBIDDEN") return { status: 503, code, message: "تعذر التحقق من صلاحية خدمة التقارير. تواصل مع مدير النظام." };
+  if (code === "E_REPORT_LIST" || code === "E_REPORT_READ" || code === "E_REPORT_FILE") return { status: 503, code: "E_REPORT_TEMPORARY", message: "تعذر الوصول إلى التقارير الآن. أعد المحاولة بعد قليل." };
+  return { status: 500, code: "E_REPORT", message: "تعذر تنفيذ طلب التقرير الآن." };
+}
+
+export function classifyWeeklyReportBackendError(error: { code?: string; message?: string } | null, fallback: string) {
+  if (!error) return fallback;
+  if (["42P01", "PGRST204", "PGRST205"].includes(error.code ?? "")) return "E_REPORT_CONFIG";
+  if (["42501", "PGRST301"].includes(error.code ?? "")) return "E_REPORT_BACKEND_FORBIDDEN";
+  return fallback;
+}
+
 export type WeeklyReportInput = {
   title: string;
   periodStart: string;
@@ -39,6 +58,27 @@ function isIsoDate(value: string) {
 
 export function canManageWeeklyReports(profile: { active: boolean; roles: string[] } | null) {
   return Boolean(profile?.active && profile.roles.includes("admin"));
+}
+
+export function canReadWeeklyReport(profile: { active: boolean; roles: string[] } | null, report: { published_at: string | null }) {
+  return Boolean(profile?.active && (profile.roles.includes("admin") || report.published_at));
+}
+
+export function visibleWeeklyReports<T extends { published_at: string | null }>(
+  profile: { active: boolean; roles: string[] } | null,
+  reports: T[],
+) {
+  return reports.filter((report) => canReadWeeklyReport(profile, report));
+}
+
+export function validateWeeklyReportMetadata(input: { title: unknown; periodStart: unknown; periodEnd: unknown }) {
+  if (typeof input.title !== "string" || typeof input.periodStart !== "string" || typeof input.periodEnd !== "string") {
+    return { ok: false as const, message: "بيانات التقرير غير صحيحة.", code: "E_METADATA" };
+  }
+  const validated = validateWeeklyReportInput({ title: input.title, periodStart: input.periodStart, periodEnd: input.periodEnd, filename: "report.html" });
+  return validated.ok
+    ? { ok: true as const, value: { title: validated.value.title, periodStart: validated.value.periodStart, periodEnd: validated.value.periodEnd } }
+    : validated;
 }
 
 export function isSameOriginAppRequest(input: {
@@ -124,10 +164,11 @@ export function immutableWeeklyReportPath(reportId: string, sha256: string, toke
   return `${reportId}/${token}-${sha256.slice(0, 16)}.html`;
 }
 
-export function publicWeeklyReport<T extends { storage_path: string; uploaded_by: string }>(report: T): Omit<T, "storage_path" | "uploaded_by"> {
+export function publicWeeklyReport<T extends { storage_path: string; uploaded_by: string; published_by?: string | null }>(report: T): Omit<T, "storage_path" | "uploaded_by" | "published_by"> {
   const copy = { ...report };
   delete (copy as Partial<T>).storage_path;
   delete (copy as Partial<T>).uploaded_by;
+  delete (copy as Partial<T>).published_by;
   return copy;
 }
 
