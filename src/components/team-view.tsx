@@ -1,5 +1,7 @@
 "use client";
 
+import { useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { MyMaterials } from "@/components/my-materials";
 import { TeamMemberPicker, type TeamMemberOption } from "@/components/team-member-picker";
 import type { TeamMemberOption as AssignmentTeamMemberOption } from "@/lib/admin-create-item";
@@ -28,6 +30,13 @@ export function TeamView({
   assignmentTeamMembers,
   assignmentTeamMembersLoadError,
 }: Props) {
+  const router = useRouter();
+  const [retryingTeamMembers, startTeamMembersRetry] = useTransition();
+
+  function retryTeamMembers() {
+    startTeamMembersRetry(() => router.refresh());
+  }
+
   return (
     <MyMaterials
       title="عرض مهام الفريق"
@@ -37,6 +46,8 @@ export function TeamView({
       roles={roles}
       teamMembers={assignmentTeamMembers}
       teamMembersLoadError={assignmentTeamMembersLoadError}
+      onRetryTeamMembers={retryTeamMembers}
+      retryingTeamMembers={retryingTeamMembers}
       showMaterialSections={Boolean(selectedMember) && !materialsError}
       beforeLists={(
         <div className="team-view-stack">

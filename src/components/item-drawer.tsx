@@ -14,6 +14,7 @@ import {
   hydrateItemAssignments,
   itemAssignmentControlsDisabled,
   itemAssignmentSaveEnabled,
+  multipleAssignmentParts,
   updateItemAssignment,
 } from "@/lib/item-assignment-editor";
 import { type EditableItemField, getItemPermissions, safeHttpsHref } from "@/lib/item-permissions";
@@ -147,6 +148,12 @@ function memberLabel(member: TeamMemberOption) {
   return `${member.display_name} — ${member.email}`;
 }
 
+const assignmentPartLabels = {
+  writer: "الكاتب",
+  producer: "المنتج",
+  reviewer: "المراجع",
+} as const;
+
 function buildItemPayload(editable: EditableState, fields: EditableItemField[]) {
   const payload: Partial<Record<EditableItemField, string | number | null>> = {};
   for (const field of fields) {
@@ -263,10 +270,16 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const assignmentsHydrated = assignmentEditor.itemId === itemId && assignmentEditor.persisted !== null;
   const assignmentItemReady = loadState === "ready" && Boolean(item && item.id === itemId);
   const teamAvailability = teamMembersAvailability(teamMembers, teamMembersLoadError, retryingTeamMembers);
+  const multiplyAssignedParts = useMemo(
+    () => multipleAssignmentParts(details?.participants ?? []),
+    [details?.participants],
+  );
+  const assignmentsHaveSingularRepresentation = multiplyAssignedParts.length === 0;
   const assignmentControlState = {
     hydrated: assignmentsHydrated,
     itemReady: assignmentItemReady,
     teamReady: teamAvailability === "ready",
+    singularAssignments: assignmentsHaveSingularRepresentation,
     busy: isPending || actionBusy,
   };
   const writers = useMemo(() => teamMembersForRole(teamMembers, "writer"), [teamMembers]);
@@ -695,7 +708,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
 
   async function saveAssignments() {
     if (!item) return;
-    const submission = await executeItemAssignmentSave(assignmentEditor, item.id, canSubmitAssignments && teamAvailability === "ready", assignmentItemReady, (assignmentPayload) => (
+    const submission = await executeItemAssignmentSave(assignmentEditor, item.id, canSubmitAssignments, assignmentControlState, (assignmentPayload) => (
       fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -915,6 +928,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 <p className="muted">هذا القسم للأدمن فقط؛ الحفظ يراجع أدوار الحسابات النشطة داخل قاعدة البيانات.</p>
                 {!assignmentItemReady && loadState !== "error" ? <p className="muted" role="status">جارٍ تحميل التعيينات... ستتاح الحقول بعد اكتمال التحميل.</p> : null}
                 {assignmentsHydrated && teamAvailability === "empty" ? <p className="muted">لا يوجد أعضاء فريق نشطون متاحون للتعيين.</p> : null}
+                {multiplyAssignedParts.length ? <p className="notice" role="alert">تتضمن هذه المادة أكثر من مكلّف في دور {multiplyAssignedParts.map((part) => assignmentPartLabels[part]).join("، ")}. لا يمكن تعديل التعيينات بأمان من واجهة التعيين الفردي الحالية.</p> : null}
                 <div className="form-grid">
                   <label className="field">الكاتب المسؤول<select className="input" required disabled={assignmentControlsDisabled} value={assignments.writer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "writer_id", event.target.value, canEditAssignments))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
                   <label className="field">المنتج المسؤول<select className="input" disabled={assignmentControlsDisabled} value={assignments.producer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "producer_id", event.target.value, canEditAssignments))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>

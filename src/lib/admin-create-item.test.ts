@@ -243,6 +243,9 @@ test("all shared drawer entry points supply admin-only team state and retry cont
   }
   assert.match(teamView, /teamMembers=\{assignmentTeamMembers\}/);
   assert.match(teamView, /teamMembersLoadError=\{assignmentTeamMembersLoadError\}/);
+  assert.match(teamView, /startTeamMembersRetry\(\(\) => router\.refresh\(\)\)/);
+  assert.match(teamView, /onRetryTeamMembers=\{retryTeamMembers\}/);
+  assert.match(teamView, /retryingTeamMembers=\{retryingTeamMembers\}/);
   assert.match(teamViewPage, /await requireAdmin\(\)/);
   assert.match(teamViewPage, /listAdminUsers\(\)/);
   assert.match(teamViewPage, /assignmentTeamMembers=\{activeTeamMemberOptions\(adminUsersResult\.users\)\}/);

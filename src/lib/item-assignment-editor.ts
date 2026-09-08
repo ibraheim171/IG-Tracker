@@ -7,6 +7,8 @@ export type ItemAssignmentState = {
   reviewer_id: string;
 };
 
+export type ItemAssignmentField = keyof ItemAssignmentState;
+
 export type ItemAssignmentParticipant = {
   user_id: string;
   part: ParticipantPart;
@@ -16,6 +18,7 @@ export type ItemAssignmentEditorState = {
   itemId: string | null;
   draft: ItemAssignmentState;
   persisted: ItemAssignmentState | null;
+  dirtyFields: ItemAssignmentField[];
 };
 
 export type ItemAssignmentPayload = {
@@ -28,6 +31,7 @@ export type ItemAssignmentControlState = {
   hydrated: boolean;
   itemReady: boolean;
   teamReady: boolean;
+  singularAssignments: boolean;
   busy: boolean;
 };
 
@@ -60,6 +64,7 @@ export function createItemAssignmentEditorState(itemId: string | null = null): I
     itemId,
     draft: copyAssignments(emptyAssignments),
     persisted: null,
+    dirtyFields: [],
   };
 }
 
@@ -79,11 +84,14 @@ export function hydrateItemAssignments(
 ): ItemAssignmentEditorState {
   if (state.itemId !== itemId) return state;
   const persisted = assignmentStateFromParticipants(participants);
-  const preserveDraft = state.persisted !== null && !assignmentsEqual(state.draft, state.persisted);
+  const draft = copyAssignments(persisted);
+  for (const field of state.dirtyFields) draft[field] = state.draft[field];
+  const dirtyFields = state.dirtyFields.filter((field) => draft[field] !== persisted[field]);
   return {
     itemId,
-    draft: preserveDraft ? state.draft : copyAssignments(persisted),
+    draft,
     persisted,
+    dirtyFields,
   };
 }
 
@@ -95,17 +103,30 @@ export function updateItemAssignment(
   authorized: boolean,
 ): ItemAssignmentEditorState {
   if (!authorized || state.itemId !== itemId || state.persisted === null) return state;
-  return { ...state, draft: { ...state.draft, [field]: value } };
+  const draft = { ...state.draft, [field]: value };
+  const dirtyFields = value === state.persisted[field]
+    ? state.dirtyFields.filter((candidate) => candidate !== field)
+    : state.dirtyFields.includes(field) ? state.dirtyFields : [...state.dirtyFields, field];
+  return { ...state, draft, dirtyFields };
 }
 
 export function itemAssignmentsChanged(state: ItemAssignmentEditorState, itemId: string) {
   return state.itemId === itemId
     && state.persisted !== null
+    && state.dirtyFields.length > 0
     && !assignmentsEqual(state.draft, state.persisted);
 }
 
 export function itemAssignmentControlsDisabled(control: ItemAssignmentControlState) {
-  return !control.hydrated || !control.itemReady || !control.teamReady || control.busy;
+  return !control.hydrated || !control.itemReady || !control.teamReady || !control.singularAssignments || control.busy;
+}
+
+export function multipleAssignmentParts(participants: ItemAssignmentParticipant[]) {
+  const counts = new Map<ParticipantPart, number>();
+  for (const participant of participants) {
+    counts.set(participant.part, (counts.get(participant.part) ?? 0) + 1);
+  }
+  return (["writer", "producer", "reviewer"] as const).filter((part) => (counts.get(part) ?? 0) > 1);
 }
 
 export function itemAssignmentSaveEnabled(
@@ -124,9 +145,9 @@ export function itemAssignmentPayload(
   state: ItemAssignmentEditorState,
   itemId: string,
   authorized: boolean,
-  ready: boolean,
+  control: ItemAssignmentControlState,
 ): ItemAssignmentPayload | null {
-  if (!authorized || !ready || !itemAssignmentsChanged(state, itemId) || !state.draft.writer_id) return null;
+  if (!itemAssignmentSaveEnabled(state, itemId, authorized, control)) return null;
   return {
     writer_id: state.draft.writer_id,
     producer_id: state.draft.producer_id || null,
@@ -138,10 +159,10 @@ export async function executeItemAssignmentSave<T>(
   state: ItemAssignmentEditorState,
   itemId: string,
   authorized: boolean,
-  ready: boolean,
+  control: ItemAssignmentControlState,
   submit: (payload: ItemAssignmentPayload) => Promise<T>,
 ): Promise<{ started: false } | { started: true; value: T }> {
-  const payload = itemAssignmentPayload(state, itemId, authorized, ready);
+  const payload = itemAssignmentPayload(state, itemId, authorized, control);
   if (!payload) return { started: false };
   return { started: true, value: await submit(payload) };
 }
@@ -153,5 +174,5 @@ export function commitItemAssignments(
 ): ItemAssignmentEditorState {
   if (state.itemId !== itemId) return state;
   const persisted = assignmentStateFromParticipants(participants);
-  return { itemId, draft: copyAssignments(persisted), persisted };
+  return { itemId, draft: copyAssignments(persisted), persisted, dirtyFields: [] };
 }

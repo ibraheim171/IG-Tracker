@@ -1,7 +1,7 @@
 import type { TeamMemberOption } from "@/lib/admin-create-item";
 import type { RoleName } from "@/lib/ui-data";
 
-type AdminUserResponse = {
+export type AdminTeamUser = {
   id: string;
   display_name: string;
   email: string;
@@ -19,6 +19,34 @@ export const teamMembersLoadError = "تعذر تحميل أعضاء الفريق
 
 export type TeamMembersAvailability = "loading" | "error" | "empty" | "ready";
 
+export type TeamViewMemberOption = {
+  id: string;
+  display_name: string;
+  roles: RoleName[];
+  active: boolean;
+};
+
+export function resolveTeamViewTeamState(
+  users: AdminTeamUser[],
+  error: string | null,
+  rawMemberId: string | null | undefined,
+  requestedMemberId: string | null,
+) {
+  const members: TeamViewMemberOption[] = users.map((user) => ({
+    id: user.id,
+    display_name: user.display_name,
+    roles: user.roles,
+    active: user.active,
+  }));
+  const selectedMember = requestedMemberId ? members.find((member) => member.id === requestedMemberId) ?? null : null;
+  const invalidMessage = error
+    ? "تعذر تحميل أعضاء الفريق. حاول مجددًا."
+    : rawMemberId && !selectedMember
+      ? "تعذر العثور على العضو المطلوب. اختر عضوًا من القائمة."
+      : null;
+  return { members, selectedMember, invalidMessage, canLoadMaterials: Boolean(selectedMember) };
+}
+
 export function teamMembersAvailability(teamMembers: TeamMemberOption[], error: string | null, loading: boolean): TeamMembersAvailability {
   if (loading) return "loading";
   if (error) return "error";
@@ -31,7 +59,7 @@ export function teamMembersForRole(teamMembers: TeamMemberOption[], role: "write
     .sort((a, b) => a.display_name.localeCompare(b.display_name, "ar"));
 }
 
-export function activeTeamMemberOptions(users: AdminUserResponse[]): TeamMemberOption[] {
+export function activeTeamMemberOptions(users: AdminTeamUser[]): TeamMemberOption[] {
   return users
     .filter((user) => user.active && !user.must_change_password)
     .map((user) => ({
@@ -49,7 +77,7 @@ export async function fetchAdminTeamMembers(fetcher: () => Promise<FetchResponse
     if (!response.ok || !Array.isArray(payload.users)) {
       return { teamMembers: [] as TeamMemberOption[], error: teamMembersLoadError };
     }
-    return { teamMembers: activeTeamMemberOptions(payload.users as AdminUserResponse[]), error: null };
+    return { teamMembers: activeTeamMemberOptions(payload.users as AdminTeamUser[]), error: null };
   } catch {
     return { teamMembers: [] as TeamMemberOption[], error: teamMembersLoadError };
   }

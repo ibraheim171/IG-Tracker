@@ -19,18 +19,21 @@ type Props = {
   loadError?: string | null;
   teamMembers?: TeamMemberOption[];
   teamMembersLoadError?: string | null;
+  onRetryTeamMembers?: () => void | Promise<void>;
+  retryingTeamMembers?: boolean;
 };
 
 function trackStyle(color: string | null) {
   return color ? ({ "--track-color": color } as CSSProperties & { "--track-color": string }) : undefined;
 }
 
-export function MyMaterials({ materials, currentUserId, roles, title = "موادي", eyebrow = "شخصي", beforeLists, showMaterialSections = true, loadError = null, teamMembers: initialTeamMembers = [], teamMembersLoadError: initialTeamMembersLoadError = null }: Props) {
+export function MyMaterials({ materials, currentUserId, roles, title = "موادي", eyebrow = "شخصي", beforeLists, showMaterialSections = true, loadError = null, teamMembers: initialTeamMembers = [], teamMembersLoadError: initialTeamMembersLoadError = null, onRetryTeamMembers: retryTeamMembersOverride, retryingTeamMembers: externalRetryingTeamMembers = false }: Props) {
   const router = useRouter();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [teamMembers, setTeamMembers] = useState(initialTeamMembers);
   const [teamMembersError, setTeamMembersError] = useState(initialTeamMembersLoadError);
-  const [retryingTeamMembers, setRetryingTeamMembers] = useState(false);
+  const [locallyRetryingTeamMembers, setLocallyRetryingTeamMembers] = useState(false);
+  const retryingTeamMembers = externalRetryingTeamMembers || locallyRetryingTeamMembers;
   const isAdmin = isAdminRole(roles);
   const isUnsubmittedWriterItem = (material: MyMaterial) => material.parts.includes("writer") && material.item.status === "idea";
   const current = materials.filter(isUnsubmittedWriterItem);
@@ -44,11 +47,18 @@ export function MyMaterials({ materials, currentUserId, roles, title = "مواد
 
   async function retryTeamMembers() {
     if (!isAdmin || retryingTeamMembers) return;
-    setRetryingTeamMembers(true);
-    const result = await fetchAdminTeamMembers();
-    setTeamMembers(result.teamMembers);
-    setTeamMembersError(result.error);
-    setRetryingTeamMembers(false);
+    if (retryTeamMembersOverride) {
+      await retryTeamMembersOverride();
+      return;
+    }
+    setLocallyRetryingTeamMembers(true);
+    try {
+      const result = await fetchAdminTeamMembers();
+      setTeamMembers(result.teamMembers);
+      setTeamMembersError(result.error);
+    } finally {
+      setLocallyRetryingTeamMembers(false);
+    }
   }
 
   return (

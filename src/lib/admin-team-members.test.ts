@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchAdminTeamMembers, teamMembersAvailability, teamMembersForRole, teamMembersLoadError } from "./admin-team-members.ts";
+import { fetchAdminTeamMembers, resolveTeamViewTeamState, teamMembersAvailability, teamMembersForRole, teamMembersLoadError } from "./admin-team-members.ts";
 
 test("يفصل فشل تحميل أعضاء الفريق عن القائمة الفارغة ويقبل إعادة المحاولة", async () => {
   let calls = 0;
@@ -50,4 +50,26 @@ test("تعرض محددات الدرج أعضاء الفريق النشطين ب
   assert.equal(teamMembersForRole(result.teamMembers, "writer")[0]?.id, "multi-role");
   assert.equal(teamMembersForRole(result.teamMembers, "producer")[0]?.id, "multi-role");
   assert.equal(teamMembersForRole(result.teamMembers, "reviewer")[0]?.id, "multi-role");
+});
+
+test("تعيد محاولة عرض الفريق بناء قائمة الأعضاء وتزيل الفشل وتستعيد العضو المطلوب", () => {
+  const requestedMemberId = "11111111-1111-4111-8111-111111111111";
+  const failed = resolveTeamViewTeamState([], teamMembersLoadError, requestedMemberId, requestedMemberId);
+  assert.deepEqual(failed.members, []);
+  assert.equal(failed.selectedMember, null);
+  assert.match(failed.invalidMessage ?? "", /تعذر تحميل أعضاء الفريق/);
+  assert.equal(failed.canLoadMaterials, false);
+
+  const retried = resolveTeamViewTeamState([{
+    id: requestedMemberId,
+    display_name: "عضو الفريق",
+    email: "member@example.test",
+    roles: ["producer"],
+    active: true,
+    must_change_password: false,
+  }], null, requestedMemberId, requestedMemberId);
+  assert.equal(retried.members[0]?.id, requestedMemberId);
+  assert.equal(retried.selectedMember?.id, requestedMemberId);
+  assert.equal(retried.invalidMessage, null);
+  assert.equal(retried.canLoadMaterials, true);
 });
