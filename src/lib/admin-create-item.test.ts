@@ -207,17 +207,26 @@ test("admin item creation starts from idea and atomically creates participants, 
   assert.equal(/exception\s+when\s+others/i.test(creationMigration), false);
 });
 
-test("admin assignment edit RPC replaces operational assignments through trusted DB code only", () => {
-  assert.match(creationMigration, /create or replace function public\.admin_save_item_assignments/);
-  assert.match(creationMigration, /if not public\.is_admin\(\) then/);
-  assert.match(creationMigration, /select \* into it from public\.items where id = p_item for update/);
-  assert.match(creationMigration, /if it\.is_archived then raise exception 'ARCHIVED_IMMUTABLE:/);
-  assert.match(creationMigration, /if it\.status = 'published' then raise exception 'PUBLISHED_IMMUTABLE:/);
-  assert.match(creationMigration, /if it\.status = 'cancelled' then raise exception 'CANCELLED_IMMUTABLE:/);
-  assert.match(creationMigration, /where id in \(p_writer, p_producer, p_reviewer\)[\s\S]*order by id[\s\S]*for update/);
-  assert.match(creationMigration, /from public\.item_participants[\s\S]*for update/);
-  assert.match(creationMigration, /delete from public\.item_participants[\s\S]*part in \('writer', 'producer', 'reviewer'\)/);
-  assert.match(creationMigration, /on conflict \(item_id, user_id, part\) do nothing/);
+test("current admin assignment RPC replaces the old signature and guards every participant write", () => {
+  assert.match(assignmentConcurrencyMigration, /drop function public\.admin_save_item_assignments\(uuid, uuid, uuid, uuid\)/);
+  assert.match(assignmentConcurrencyMigration, /create function public\.admin_save_item_assignments\([\s\S]*p_item uuid[\s\S]*p_writer uuid[\s\S]*p_expected_revision text[\s\S]*p_producer uuid[\s\S]*p_reviewer uuid/);
+  assert.match(assignmentConcurrencyMigration, /if not public\.is_admin\(\) then/);
+  assert.match(assignmentConcurrencyMigration, /select \* into it from public\.items where id = p_item for update/);
+  assert.match(assignmentConcurrencyMigration, /if it\.is_archived then raise exception 'ARCHIVED_IMMUTABLE:/);
+  assert.match(assignmentConcurrencyMigration, /if it\.status = 'published' then raise exception 'PUBLISHED_IMMUTABLE:/);
+  assert.match(assignmentConcurrencyMigration, /if it\.status = 'cancelled' then raise exception 'CANCELLED_IMMUTABLE:/);
+  assert.match(assignmentConcurrencyMigration, /where id in \(p_writer, p_producer, p_reviewer\)[\s\S]*order by id[\s\S]*for update/);
+  assert.match(assignmentConcurrencyMigration, /from public\.item_participants[\s\S]*for update/);
+
+  const staleGuard = assignmentConcurrencyMigration.indexOf("if current_revision <> expected_revision then");
+  const multiGuard = assignmentConcurrencyMigration.indexOf("if exists (", staleGuard);
+  const firstDelete = assignmentConcurrencyMigration.indexOf("delete from public.item_participants");
+  const firstInsert = assignmentConcurrencyMigration.indexOf("insert into public.item_participants");
+  assert.ok(staleGuard > 0 && multiGuard > staleGuard);
+  assert.ok(firstDelete > multiGuard);
+  assert.ok(firstInsert > firstDelete);
+  assert.match(assignmentConcurrencyMigration, /delete from public\.item_participants[\s\S]*part in \('writer', 'producer', 'reviewer'\)/);
+  assert.match(assignmentConcurrencyMigration, /on conflict \(item_id, user_id, part\) do nothing/);
 });
 
 test("shared assignment edit logic hides historical items while drawer hydration keeps active editor mounted", () => {
@@ -265,7 +274,8 @@ test("create and assignment routes are same-origin admin-only RPC wrappers witho
     assert.equal(/from\("(items|item_participants|tracks)"\)\.(insert|update|delete|upsert)/.test(source), false);
   }
   assert.match(createItemRoute, /rpc\("admin_create_item"/);
-  assert.match(createItemRoute, /assignmentRevision: itemAssignmentRevision\(\[\]\)/);
+  assert.match(createItemRoute, /from\("item_participants"\)[\s\S]*resolveLoadedItemAssignmentRevision/);
+  assert.doesNotMatch(createItemRoute, /itemAssignmentRevision\(\[\]\)/);
   assert.match(createTrackRoute, /rpc\("admin_create_track"/);
   assert.match(assignmentsRoute, /rpc\("admin_save_item_assignments"/);
   assert.match(assignmentsRoute, /p_expected_revision: body\.value\.expectedRevision/);

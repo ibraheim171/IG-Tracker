@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { itemAssignmentRevision } from "./item-assignment-revision.ts";
+import {
+  itemAssignmentRevision,
+  resolveLoadedItemAssignmentRevision,
+} from "./item-assignment-revision.ts";
 
 const migration = readFileSync("supabase/migrations/20260908031720_assignment_optimistic_concurrency.sql", "utf8");
 const saveRoute = readFileSync("src/app/api/admin/items/[itemId]/participants/route.ts", "utf8");
@@ -68,9 +71,38 @@ test("item details and save response use the same complete revision helper", () 
   assert.match(saveRoute, /assignmentConflict \|\| multipleAssignments \? 409 : 400/);
 });
 
-test("new-draft assignment sends the empty revision and cannot bypass the guarded save route", () => {
-  assert.equal(itemAssignmentRevision([]), "d41d8cd98f00b204e9800998ecf8427e");
-  assert.match(createRoute, /assignmentRevision: itemAssignmentRevision\(\[\]\)/);
+test("new-draft revision reflects the participants actually persisted by creation", () => {
+  const actualParticipants = [{ user_id: writerId, part: "writer" as const }];
+  const loaded = resolveLoadedItemAssignmentRevision({ data: actualParticipants, error: null });
+  assert.equal(loaded.ok, true);
+  if (loaded.ok) {
+    const currentPersistedRevision = itemAssignmentRevision(actualParticipants);
+    assert.equal(loaded.assignmentRevision, currentPersistedRevision, "an immediate save must compare the same current revision");
+    assert.notEqual(loaded.assignmentRevision, itemAssignmentRevision([]));
+  }
+
+  const empty = resolveLoadedItemAssignmentRevision({ data: [], error: null });
+  assert.deepEqual(empty, {
+    ok: true,
+    assignmentRevision: "d41d8cd98f00b204e9800998ecf8427e",
+  });
+
+  const failed = resolveLoadedItemAssignmentRevision({ data: null, error: new Error("read failed") });
+  assert.deepEqual(failed, {
+    ok: false,
+    error: {
+      code: "E_ITEM_CREATE_PARTICIPANTS",
+      error: "تم إنشاء المادة، لكن تعذر التحقق من تعييناتها الحالية. افتح المادة وأعد المحاولة.",
+    },
+  });
+  assert.equal("assignmentRevision" in failed, false);
+
+  const failedEmpty = resolveLoadedItemAssignmentRevision({ data: [], error: new Error("read failed") });
+  assert.equal(failedEmpty.ok, false, "a failed read must never be treated as a genuinely empty participant set");
+
+  assert.match(createRoute, /from\("item_participants"\)[\s\S]*eq\("item_id", data\.id\)[\s\S]*resolveLoadedItemAssignmentRevision/);
+  assert.match(createRoute, /if \(!revisionResult\.ok\)[\s\S]*status: 500/);
+  assert.doesNotMatch(createRoute, /itemAssignmentRevision\(\[\]\)/);
   assert.match(createModal, /!result\.assignmentRevision/);
   assert.match(createModal, /expected_revision: result\.assignmentRevision/);
 });

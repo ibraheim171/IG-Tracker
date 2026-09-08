@@ -1,10 +1,20 @@
 import { createHash } from "node:crypto";
 import type { ParticipantPart } from "./ui-data.ts";
 
-type AssignmentRevisionParticipant = {
+export type AssignmentRevisionParticipant = {
   user_id: string;
   part: ParticipantPart;
 };
+
+type AssignmentParticipantLoadResult = {
+  data: AssignmentRevisionParticipant[] | null;
+  error: unknown;
+};
+
+export const createdItemAssignmentLoadError = {
+  code: "E_ITEM_CREATE_PARTICIPANTS",
+  error: "تم إنشاء المادة، لكن تعذر التحقق من تعييناتها الحالية. افتح المادة وأعد المحاولة.",
+} as const;
 
 const partOrder: Record<ParticipantPart, number> = {
   writer: 1,
@@ -23,4 +33,15 @@ export function itemAssignmentRevision(participants: AssignmentRevisionParticipa
     .map((participant) => `${participant.part}:${participant.user_id}`)
     .join("|");
   return createHash("md5").update(canonical).digest("hex");
+}
+
+export function resolveLoadedItemAssignmentRevision(result: AssignmentParticipantLoadResult) {
+  if (result.error || result.data === null) {
+    return { ok: false as const, error: createdItemAssignmentLoadError };
+  }
+
+  return {
+    ok: true as const,
+    assignmentRevision: itemAssignmentRevision(result.data),
+  };
 }

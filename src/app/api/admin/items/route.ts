@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { Json, Tables } from "@/lib/database.types";
 import { safeRpcError, toRpcJson, validateAdminCreateItemPayload } from "@/lib/admin-create-item";
-import { itemAssignmentRevision } from "@/lib/item-assignment-revision";
+import {
+  resolveLoadedItemAssignmentRevision,
+  type AssignmentRevisionParticipant,
+} from "@/lib/item-assignment-revision";
 import { requireActiveRouteProfile } from "@/lib/route-auth";
 
 type ItemRow = Tables<"items">;
@@ -63,7 +66,24 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    return jsonWithCookies(cookieResponse, { item: data, assignmentRevision: itemAssignmentRevision([]) }, { status: 200 });
+    const participantsResult = await auth.supabase
+      .from("item_participants")
+      .select("user_id, part")
+      .eq("item_id", data.id)
+      .in("part", ["writer", "producer", "reviewer"]);
+    const revisionResult = resolveLoadedItemAssignmentRevision({
+      data: participantsResult.data as AssignmentRevisionParticipant[] | null,
+      error: participantsResult.error,
+    });
+
+    if (!revisionResult.ok) {
+      return jsonWithCookies(cookieResponse, revisionResult.error, { status: 500 });
+    }
+
+    return jsonWithCookies(cookieResponse, {
+      item: data,
+      assignmentRevision: revisionResult.assignmentRevision,
+    }, { status: 200 });
   } catch {
     return jsonWithCookies(cookieResponse, { error: "تعذر إنشاء المادة. رمز التشخيص: ITEM_CREATE_SERVER.", code: "E_SERVER" }, { status: 500 });
   }
