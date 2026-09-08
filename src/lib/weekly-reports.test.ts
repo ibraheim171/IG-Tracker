@@ -81,7 +81,7 @@ test("preview and download headers enforce a non-executable private response", (
 });
 
 test("migration, route, and iframe wiring retain the tested server-only security contract", () => {
-  const migration = readFileSync("supabase/migrations/20260908105829_weekly_reports.sql", "utf8");
+  const migration = readFileSync("supabase/migrations/20260908152245_weekly_reports.sql", "utf8");
   assert.match(migration, /enable row level security/i);
   assert.match(migration, /force row level security/i);
   assert.match(migration, /create index weekly_reports_created_at_idx/i);
