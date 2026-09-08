@@ -55,6 +55,7 @@ test("تعرض محددات الدرج أعضاء الفريق النشطين ب
 test("تعيد محاولة عرض الفريق بناء قائمة الأعضاء وتزيل الفشل وتستعيد العضو المطلوب", () => {
   const requestedMemberId = "11111111-1111-4111-8111-111111111111";
   const failed = resolveTeamViewTeamState([], teamMembersLoadError, requestedMemberId, requestedMemberId);
+  assert.equal(failed.availability, "error");
   assert.deepEqual(failed.members, []);
   assert.equal(failed.selectedMember, null);
   assert.match(failed.invalidMessage ?? "", /تعذر تحميل أعضاء الفريق/);
@@ -69,7 +70,17 @@ test("تعيد محاولة عرض الفريق بناء قائمة الأعضا
     must_change_password: false,
   }], null, requestedMemberId, requestedMemberId);
   assert.equal(retried.members[0]?.id, requestedMemberId);
+  assert.equal(retried.availability, "ready");
   assert.equal(retried.selectedMember?.id, requestedMemberId);
   assert.equal(retried.invalidMessage, null);
   assert.equal(retried.canLoadMaterials, true);
+});
+
+test("يعرض عرض الفريق حالة الفراغ الحقيقية دون محدد عضو زائف", () => {
+  const empty = resolveTeamViewTeamState([], null, null, null);
+  assert.equal(empty.availability, "empty");
+  assert.deepEqual(empty.members, []);
+  assert.equal(empty.selectedMember, null);
+  assert.equal(empty.invalidMessage, null);
+  assert.equal(empty.canLoadMaterials, false);
 });

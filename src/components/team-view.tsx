@@ -5,12 +5,14 @@ import { useRouter } from "next/navigation";
 import { MyMaterials } from "@/components/my-materials";
 import { TeamMemberPicker, type TeamMemberOption } from "@/components/team-member-picker";
 import type { TeamMemberOption as AssignmentTeamMemberOption } from "@/lib/admin-create-item";
+import type { TeamViewMembersAvailability } from "@/lib/admin-team-members";
 import type { MyMaterial, RoleName } from "@/lib/ui-data";
 
 type Props = {
   members: TeamMemberOption[];
   selectedMember: TeamMemberOption | null;
   invalidMessage: string | null;
+  membersAvailability: TeamViewMembersAvailability;
   materialsError: string | null;
   materials: MyMaterial[];
   currentUserId: string;
@@ -23,6 +25,7 @@ export function TeamView({
   members,
   selectedMember,
   invalidMessage,
+  membersAvailability,
   materialsError,
   materials,
   currentUserId,
@@ -51,14 +54,15 @@ export function TeamView({
       showMaterialSections={Boolean(selectedMember) && !materialsError}
       beforeLists={(
         <div className="team-view-stack">
-          <TeamMemberPicker members={members} selectedMemberId={selectedMember?.id ?? null} />
+          {membersAvailability === "ready" ? <TeamMemberPicker members={members} selectedMemberId={selectedMember?.id ?? null} /> : null}
+          {membersAvailability === "empty" ? <p className="muted" role="status">لا يوجد أعضاء فريق متاحون.</p> : null}
           {invalidMessage ? <p className="notice" role="alert">{invalidMessage}</p> : null}
           {selectedMember ? (
             <>
               <p className="notice">أنت تعرض مهام {selectedMember.display_name}. حسابك ما زال حساب الأدمن.</p>
               <p className="muted">عند فتح المادة ستستخدم صلاحياتك كأدمن، ولن تنفّذ أي إجراء باسم العضو.</p>
             </>
-          ) : !invalidMessage ? (
+          ) : !invalidMessage && membersAvailability === "ready" ? (
             <p className="muted">اختر عضوًا لعرض المواد المسندة إليه.</p>
           ) : null}
           {materialsError ? <p className="notice" role="alert">{materialsError}</p> : null}

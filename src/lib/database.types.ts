@@ -1535,6 +1535,7 @@ export type Database = {
       }
       admin_save_item_assignments: {
         Args: {
+          p_expected_revision: string
           p_item: string
           p_producer?: string | null
           p_reviewer?: string | null

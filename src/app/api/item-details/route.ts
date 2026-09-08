@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { itemAssignmentRevision } from "@/lib/item-assignment-revision";
 import type { Tables } from "@/lib/database.types";
 import { requireActiveRouteProfile } from "@/lib/route-auth";
 
@@ -30,6 +31,7 @@ type OpenSlot = Pick<Tables<"v_slot_board">, "slot_id" | "slot_at" | "state" | "
 type DrawerDetails = {
   item: ItemRow;
   participants: ParticipantRecord[];
+  assignmentRevision: string;
   partners: PartnerRecord[];
   approvals: ApprovalRecord[];
   transitions: TransitionRecord[];
@@ -105,9 +107,11 @@ export async function GET(request: NextRequest) {
       return jsonWithCookies(cookieResponse, { error: "تعذر تحميل موعد النشر المرتبط. أعد المحاولة قبل تغيير المرحلة." }, { status: 500 });
     }
 
+    const participants = (participantsResult.data ?? []) as unknown as ParticipantRecord[];
     const details: DrawerDetails = {
       item,
-      participants: (participantsResult.data ?? []) as unknown as ParticipantRecord[],
+      participants,
+      assignmentRevision: itemAssignmentRevision(participants),
       partners: (partnersResult.data ?? []) as unknown as PartnerRecord[],
       approvals: (approvalsResult.data ?? []) as unknown as ApprovalRecord[],
       transitions: (transitionsResult.data ?? []) as unknown as TransitionRecord[],

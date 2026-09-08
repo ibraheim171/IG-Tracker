@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { Json, Tables } from "@/lib/database.types";
 import { safeRpcError, toRpcJson, validateAdminCreateItemPayload } from "@/lib/admin-create-item";
+import { itemAssignmentRevision } from "@/lib/item-assignment-revision";
 import { requireActiveRouteProfile } from "@/lib/route-auth";
 
 type ItemRow = Tables<"items">;
@@ -12,7 +13,7 @@ type CreateItemRpc = (
 
 export const dynamic = "force-dynamic";
 
-function jsonWithCookies(source: NextResponse, body: { item: ItemRow } | { error: string; code?: string }, init?: ResponseInit) {
+function jsonWithCookies(source: NextResponse, body: { item: ItemRow; assignmentRevision: string } | { error: string; code?: string }, init?: ResponseInit) {
   const response = NextResponse.json(body, init);
   response.headers.set("Cache-Control", "no-store");
   for (const cookie of source.cookies.getAll()) {
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    return jsonWithCookies(cookieResponse, { item: data }, { status: 200 });
+    return jsonWithCookies(cookieResponse, { item: data, assignmentRevision: itemAssignmentRevision([]) }, { status: 200 });
   } catch {
     return jsonWithCookies(cookieResponse, { error: "تعذر إنشاء المادة. رمز التشخيص: ITEM_CREATE_SERVER.", code: "E_SERVER" }, { status: 500 });
   }

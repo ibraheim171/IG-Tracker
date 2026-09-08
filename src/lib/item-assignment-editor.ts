@@ -18,6 +18,7 @@ export type ItemAssignmentEditorState = {
   itemId: string | null;
   draft: ItemAssignmentState;
   persisted: ItemAssignmentState | null;
+  revision: string | null;
   dirtyFields: ItemAssignmentField[];
 };
 
@@ -25,6 +26,7 @@ export type ItemAssignmentPayload = {
   writer_id: string;
   producer_id: string | null;
   reviewer_id: string | null;
+  expected_revision: string;
 };
 
 export type ItemAssignmentControlState = {
@@ -32,6 +34,7 @@ export type ItemAssignmentControlState = {
   itemReady: boolean;
   teamReady: boolean;
   singularAssignments: boolean;
+  revisionReady: boolean;
   busy: boolean;
 };
 
@@ -64,6 +67,7 @@ export function createItemAssignmentEditorState(itemId: string | null = null): I
     itemId,
     draft: copyAssignments(emptyAssignments),
     persisted: null,
+    revision: null,
     dirtyFields: [],
   };
 }
@@ -81,6 +85,7 @@ export function hydrateItemAssignments(
   state: ItemAssignmentEditorState,
   itemId: string,
   participants: ItemAssignmentParticipant[],
+  revision: string,
 ): ItemAssignmentEditorState {
   if (state.itemId !== itemId) return state;
   const persisted = assignmentStateFromParticipants(participants);
@@ -91,6 +96,7 @@ export function hydrateItemAssignments(
     itemId,
     draft,
     persisted,
+    revision,
     dirtyFields,
   };
 }
@@ -113,12 +119,13 @@ export function updateItemAssignment(
 export function itemAssignmentsChanged(state: ItemAssignmentEditorState, itemId: string) {
   return state.itemId === itemId
     && state.persisted !== null
+    && state.revision !== null
     && state.dirtyFields.length > 0
     && !assignmentsEqual(state.draft, state.persisted);
 }
 
 export function itemAssignmentControlsDisabled(control: ItemAssignmentControlState) {
-  return !control.hydrated || !control.itemReady || !control.teamReady || !control.singularAssignments || control.busy;
+  return !control.hydrated || !control.itemReady || !control.teamReady || !control.singularAssignments || !control.revisionReady || control.busy;
 }
 
 export function multipleAssignmentParts(participants: ItemAssignmentParticipant[]) {
@@ -147,11 +154,12 @@ export function itemAssignmentPayload(
   authorized: boolean,
   control: ItemAssignmentControlState,
 ): ItemAssignmentPayload | null {
-  if (!itemAssignmentSaveEnabled(state, itemId, authorized, control)) return null;
+  if (!itemAssignmentSaveEnabled(state, itemId, authorized, control) || state.revision === null) return null;
   return {
     writer_id: state.draft.writer_id,
     producer_id: state.draft.producer_id || null,
     reviewer_id: state.draft.reviewer_id || null,
+    expected_revision: state.revision,
   };
 }
 
@@ -171,8 +179,9 @@ export function commitItemAssignments(
   state: ItemAssignmentEditorState,
   itemId: string,
   participants: ItemAssignmentParticipant[],
+  revision: string,
 ): ItemAssignmentEditorState {
   if (state.itemId !== itemId) return state;
   const persisted = assignmentStateFromParticipants(participants);
-  return { itemId, draft: copyAssignments(persisted), persisted, dirtyFields: [] };
+  return { itemId, draft: copyAssignments(persisted), persisted, revision, dirtyFields: [] };
 }

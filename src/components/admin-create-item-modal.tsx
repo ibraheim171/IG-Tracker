@@ -187,8 +187,8 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
         credentials: "same-origin",
         body: JSON.stringify(payload),
       });
-      const result = (await response.json().catch(() => ({}))) as { item?: AdminCreatedItem; error?: string };
-      if (!response.ok || !result.item) {
+      const result = (await response.json().catch(() => ({}))) as { item?: AdminCreatedItem; assignmentRevision?: string; error?: string };
+      if (!response.ok || !result.item || !result.assignmentRevision) {
         setMessage(result.error ?? "تعذر إنشاء المادة. رمز التشخيص: ITEM_CREATE_UI.");
         return;
       }
@@ -203,6 +203,7 @@ export function AdminCreateItemModal({ open, onClose, onCreated, slots, teamMemb
             writer_id: form.writer_id.trim(),
             ...(form.producer_id.trim() ? { producer_id: form.producer_id.trim() } : {}),
             ...(form.reviewer_id.trim() ? { reviewer_id: form.reviewer_id.trim() } : {}),
+            expected_revision: result.assignmentRevision,
           }),
         });
         if (!assignments.ok) {

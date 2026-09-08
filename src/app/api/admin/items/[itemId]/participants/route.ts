@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { safeRpcError } from "@/lib/admin-create-item";
+import { itemAssignmentRevision } from "@/lib/item-assignment-revision";
 import { requireActiveRouteProfile } from "@/lib/route-auth";
 import type { Json, Tables } from "@/lib/database.types";
 
@@ -10,9 +11,11 @@ type AssignmentBody = {
   writer_id?: unknown;
   producer_id?: unknown;
   reviewer_id?: unknown;
+  expected_revision?: unknown;
 };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const assignmentRevisionPattern = /^[0-9a-f]{32}$/;
 
 function responseWithCookies(body: object, status: number, source: NextResponse) {
   const response = NextResponse.json(body, { status });
@@ -43,7 +46,7 @@ function validateBody(input: unknown) {
 
   const body = input as AssignmentBody;
   const keys = Object.keys(body);
-  const forbidden = keys.filter((key) => !["writer_id", "producer_id", "reviewer_id"].includes(key));
+  const forbidden = keys.filter((key) => !["writer_id", "producer_id", "reviewer_id", "expected_revision"].includes(key));
   if (forbidden.length > 0) return { ok: false as const, error: "يحتوي الطلب على حقول غير مسموحة." };
 
   const writer = optionalUuid(body.writer_id);
@@ -55,7 +58,12 @@ function validateBody(input: unknown) {
   const reviewer = optionalUuid(body.reviewer_id);
   if (reviewer === undefined) return { ok: false as const, error: "المراجع المختار غير صحيح." };
 
-  return { ok: true as const, value: { writer, producer, reviewer } };
+  const expectedRevision = typeof body.expected_revision === "string" ? body.expected_revision.trim().toLowerCase() : "";
+  if (!assignmentRevisionPattern.test(expectedRevision)) {
+    return { ok: false as const, error: "نسخة التعيينات غير صحيحة." };
+  }
+
+  return { ok: true as const, value: { writer, producer, reviewer, expectedRevision } };
 }
 
 function assignmentRows(value: Json): { user_id: string; part: ParticipantPart }[] {
@@ -91,14 +99,18 @@ export async function PUT(request: NextRequest, { params }: Params) {
     p_writer: body.value.writer,
     p_producer: body.value.producer,
     p_reviewer: body.value.reviewer,
+    p_expected_revision: body.value.expectedRevision,
   });
 
   if (error) {
+    const assignmentConflict = error.message.includes("ASSIGNMENTS_STALE:");
+    const multipleAssignments = error.message.includes("MULTIPLE_ASSIGNMENTS:");
     return responseWithCookies({
       error: safeRpcError(error.message, "تعذر حفظ تعيينات المادة. رمز التشخيص: ITEM_ASSIGNMENTS_SAVE."),
-      code: "E_ASSIGNMENTS_SAVE",
-    }, 400, cookieResponse);
+      code: assignmentConflict ? "E_ASSIGNMENTS_CONFLICT" : multipleAssignments ? "E_MULTIPLE_ASSIGNMENTS" : "E_ASSIGNMENTS_SAVE",
+    }, assignmentConflict || multipleAssignments ? 409 : 400, cookieResponse);
   }
 
-  return responseWithCookies({ participants: assignmentRows(data) }, 200, cookieResponse);
+  const participants = assignmentRows(data);
+  return responseWithCookies({ participants, assignmentRevision: itemAssignmentRevision(participants) }, 200, cookieResponse);
 }

@@ -26,6 +26,8 @@ export type TeamViewMemberOption = {
   active: boolean;
 };
 
+export type TeamViewMembersAvailability = "error" | "empty" | "ready";
+
 export function resolveTeamViewTeamState(
   users: AdminTeamUser[],
   error: string | null,
@@ -39,12 +41,13 @@ export function resolveTeamViewTeamState(
     active: user.active,
   }));
   const selectedMember = requestedMemberId ? members.find((member) => member.id === requestedMemberId) ?? null : null;
+  const availability: TeamViewMembersAvailability = error ? "error" : members.length > 0 ? "ready" : "empty";
   const invalidMessage = error
     ? "تعذر تحميل أعضاء الفريق. حاول مجددًا."
     : rawMemberId && !selectedMember
       ? "تعذر العثور على العضو المطلوب. اختر عضوًا من القائمة."
       : null;
-  return { members, selectedMember, invalidMessage, canLoadMaterials: Boolean(selectedMember) };
+  return { members, selectedMember, invalidMessage, availability, canLoadMaterials: Boolean(selectedMember) };
 }
 
 export function teamMembersAvailability(teamMembers: TeamMemberOption[], error: string | null, loading: boolean): TeamMembersAvailability {

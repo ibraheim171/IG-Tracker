@@ -7,6 +7,7 @@ import { buildMyMaterials, type ParticipantItemRow } from "./my-materials-data.t
 const creationMigration = readFileSync("supabase/migrations/20260903071931_admin_create_items_tracks.sql", "utf8");
 const roleMigration = readFileSync("supabase/migrations/20260903011558_role_field_permissions.sql", "utf8");
 const draftWorkflowMigration = readFileSync("supabase/migrations/20260904214834_draft_workflow_ux.sql", "utf8");
+const assignmentConcurrencyMigration = readFileSync("supabase/migrations/20260908031720_assignment_optimistic_concurrency.sql", "utf8");
 const createItemRoute = readFileSync("src/app/api/admin/items/route.ts", "utf8");
 const createTrackRoute = readFileSync("src/app/api/admin/tracks/route.ts", "utf8");
 const assignmentsRoute = readFileSync("src/app/api/admin/items/[itemId]/participants/route.ts", "utf8");
@@ -246,6 +247,9 @@ test("all shared drawer entry points supply admin-only team state and retry cont
   assert.match(teamView, /startTeamMembersRetry\(\(\) => router\.refresh\(\)\)/);
   assert.match(teamView, /onRetryTeamMembers=\{retryTeamMembers\}/);
   assert.match(teamView, /retryingTeamMembers=\{retryingTeamMembers\}/);
+  assert.match(teamView, /membersAvailability === "ready" \? <TeamMemberPicker/);
+  assert.match(teamView, /membersAvailability === "empty" \? <p className="muted" role="status">لا يوجد أعضاء فريق متاحون\.<\/p>/);
+  assert.match(teamView, /!invalidMessage && membersAvailability === "ready"/);
   assert.match(teamViewPage, /await requireAdmin\(\)/);
   assert.match(teamViewPage, /listAdminUsers\(\)/);
   assert.match(teamViewPage, /assignmentTeamMembers=\{activeTeamMemberOptions\(adminUsersResult\.users\)\}/);
@@ -261,8 +265,11 @@ test("create and assignment routes are same-origin admin-only RPC wrappers witho
     assert.equal(/from\("(items|item_participants|tracks)"\)\.(insert|update|delete|upsert)/.test(source), false);
   }
   assert.match(createItemRoute, /rpc\("admin_create_item"/);
+  assert.match(createItemRoute, /assignmentRevision: itemAssignmentRevision\(\[\]\)/);
   assert.match(createTrackRoute, /rpc\("admin_create_track"/);
   assert.match(assignmentsRoute, /rpc\("admin_save_item_assignments"/);
+  assert.match(assignmentsRoute, /p_expected_revision: body\.value\.expectedRevision/);
+  assert.match(assignmentConcurrencyMigration, /if not public\.is_admin\(\) then/);
   assert.match(assignmentsRoute, /PUBLISHED_IMMUTABLE|safeRpcError/);
   for (const field of ["status", "writer_id", "producer_id", "reviewer_id"]) {
     assert.equal(validateAdminCreateItemPayload({ title: "فكرة", [field]: field === "status" ? "idea" : uuidA }).ok, false, `${field} direct API payload must fail`);
@@ -277,6 +284,7 @@ test("draft creation is atomic, prevents duplicate clicks, assigns separately, a
   assert.match(createModal, /disabled=\{!canSubmit\}/);
   assert.match(createModal, /\/participants`, \{/);
   assert.match(createModal, /writer_id: form\.writer_id\.trim\(\)/);
+  assert.match(createModal, /expected_revision: result\.assignmentRevision/);
   assert.match(createModal, /تم إنشاء المسودة، لكن تعذر تعيين مسؤول الإعداد/);
   assert.match(slotsBoard, /setCreateMessage\(message\)/);
   assert.match(slotsBoard, /router\.refresh\(\)/);

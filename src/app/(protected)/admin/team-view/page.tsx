@@ -47,6 +47,7 @@ export default async function TeamViewPage({ searchParams }: { searchParams: Sea
       members={teamState.members}
       selectedMember={teamState.selectedMember}
       invalidMessage={teamState.invalidMessage}
+      membersAvailability={teamState.availability}
       materialsError={materialsError}
       materials={materials}
       currentUserId={adminProfile.id}

@@ -48,6 +48,7 @@ type OpenSlot = Pick<Tables<"v_slot_board">, "slot_id" | "slot_at" | "state" | "
 type DrawerDetails = {
   item: ItemRow;
   participants: ParticipantRecord[];
+  assignmentRevision: string;
   partners: PartnerRecord[];
   approvals: ApprovalRecord[];
   transitions: TransitionRecord[];
@@ -58,6 +59,7 @@ type DrawerDetails = {
 
 type ItemDetailsResponse = { details: DrawerDetails } | { error: string };
 type LoadState = "idle" | "loading" | "ready" | "error";
+type AssignmentConflictState = "refreshing" | "ready" | "error" | null;
 type SaveOptions = { showMessage: boolean; notifyList: boolean };
 
 type EditableState = {
@@ -224,6 +226,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const [details, setDetails] = useState<DrawerDetails | null>(null);
   const [editable, setEditable] = useState<EditableState | null>(null);
   const [assignmentEditor, setAssignmentEditor] = useState(() => createItemAssignmentEditorState(itemId));
+  const [assignmentConflict, setAssignmentConflict] = useState<AssignmentConflictState>(null);
   const [assignmentSectionOpen, setAssignmentSectionOpen] = useState(false);
   const [trackForm, setTrackForm] = useState<TrackState>(emptyTrack);
   const [showTrackForm, setShowTrackForm] = useState(false);
@@ -267,7 +270,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   const canEditAssignments = canShowItemAssignmentEditor(isAdmin, assignmentDisplayState);
   const canSubmitAssignments = canShowItemAssignmentEditor(isAdmin, item);
   const assignments = assignmentEditor.draft;
-  const assignmentsHydrated = assignmentEditor.itemId === itemId && assignmentEditor.persisted !== null;
+  const assignmentsHydrated = assignmentEditor.itemId === itemId && assignmentEditor.persisted !== null && assignmentEditor.revision !== null;
   const assignmentItemReady = loadState === "ready" && Boolean(item && item.id === itemId);
   const teamAvailability = teamMembersAvailability(teamMembers, teamMembersLoadError, retryingTeamMembers);
   const multiplyAssignedParts = useMemo(
@@ -280,6 +283,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
     itemReady: assignmentItemReady,
     teamReady: teamAvailability === "ready",
     singularAssignments: assignmentsHaveSingularRepresentation,
+    revisionReady: assignmentConflict !== "error",
     busy: isPending || actionBusy,
   };
   const writers = useMemo(() => teamMembersForRole(teamMembers, "writer"), [teamMembers]);
@@ -375,6 +379,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         setDetails(null);
         setEditable(null);
         setAssignmentEditor((current) => beginItemAssignmentLoad(current, null));
+        setAssignmentConflict(null);
         setTrackForm(emptyTrack);
         setShowTrackForm(false);
         setLoadState("idle");
@@ -398,6 +403,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
       setDetails(null);
       setEditable(null);
       setAssignmentEditor((current) => beginItemAssignmentLoad(current, itemId));
+      setAssignmentConflict(null);
       setTrackForm(emptyTrack);
       setShowTrackForm(false);
       setFailedAdvance(null);
@@ -431,7 +437,7 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
         lastSavedSignatureRef.current = editableSignature(nextEditable, saveFieldsFor(payload.details.item, payload.details.participants));
         setDetails(payload.details);
         setEditable(nextEditable);
-        setAssignmentEditor((current) => hydrateItemAssignments(current, itemId, payload.details.participants));
+        setAssignmentEditor((current) => hydrateItemAssignments(current, itemId, payload.details.participants, payload.details.assignmentRevision));
         setLoadState("ready");
       } catch (error) {
         if (sequence !== loadSequence.current) return;
@@ -707,31 +713,81 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
   }
 
   async function saveAssignments() {
-    if (!item) return;
-    const submission = await executeItemAssignmentSave(assignmentEditor, item.id, canSubmitAssignments, assignmentControlState, (assignmentPayload) => (
-      fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify(assignmentPayload),
-      })
-    ));
-    if (!submission.started) return;
-    const response = submission.value;
-    const result = (await response.json().catch(() => ({}))) as { participants?: Pick<ParticipantRecord, "user_id" | "part">[]; error?: string };
-    if (!response.ok || !result.participants) {
-      setMessage(result.error ?? assignmentsSaveErrorMessage);
-      return;
-    }
+    if (!item || !assignmentSaveEnabled) return;
+    setAssignmentConflict(null);
+    setMessage(null);
+    try {
+      const submission = await executeItemAssignmentSave(assignmentEditor, item.id, canSubmitAssignments, assignmentControlState, (assignmentPayload) => (
+        fetch(`/api/admin/items/${encodeURIComponent(item.id)}/participants`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(assignmentPayload),
+        })
+      ));
+      if (!submission.started) return;
+      const response = submission.value;
+      const result = (await response.json().catch(() => ({}))) as { participants?: Pick<ParticipantRecord, "user_id" | "part">[]; assignmentRevision?: string; error?: string; code?: string };
+      if (response.status === 409 && (result.code === "E_ASSIGNMENTS_CONFLICT" || result.code === "E_MULTIPLE_ASSIGNMENTS")) {
+        await refreshAssignmentsAfterConflict(item.id, result.code === "E_ASSIGNMENTS_CONFLICT");
+        return;
+      }
+      if (!response.ok || !result.participants) {
+        setMessage(result.error ?? assignmentsSaveErrorMessage);
+        return;
+      }
+      const savedRevision = result.assignmentRevision;
+      if (!savedRevision) {
+        setMessage(assignmentsSaveErrorMessage);
+        return;
+      }
 
-    const nextParticipants: ParticipantRecord[] = result.participants.map((row) => ({
-      ...row,
-      profiles: { display_name: memberById.get(row.user_id)?.display_name ?? "—" },
-    }));
-    setDetails((current) => current && current.item.id === item.id ? { ...current, participants: nextParticipants } : current);
-    setAssignmentEditor((current) => commitItemAssignments(current, item.id, nextParticipants));
-    setMessage("تم حفظ تعيينات الفريق.");
-    onChanged?.();
+      const nextParticipants: ParticipantRecord[] = result.participants.map((row) => ({
+        ...row,
+        profiles: { display_name: memberById.get(row.user_id)?.display_name ?? "—" },
+      }));
+      setDetails((current) => current && current.item.id === item.id ? {
+        ...current,
+        participants: nextParticipants,
+        assignmentRevision: savedRevision,
+      } : current);
+      setAssignmentEditor((current) => commitItemAssignments(current, item.id, nextParticipants, savedRevision));
+      setAssignmentConflict(null);
+      setMessage("تم حفظ تعيينات الفريق.");
+      onChanged?.();
+    } catch {
+      setMessage(assignmentsSaveErrorMessage);
+    }
+  }
+
+  async function refreshAssignmentsAfterConflict(targetItemId: string, showConflictNotice = true) {
+    setAssignmentConflict("refreshing");
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), detailTimeoutMs);
+    try {
+      const response = await fetch(`/api/item-details?itemId=${encodeURIComponent(targetItemId)}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
+      const payload = (await response.json().catch(() => ({}))) as ItemDetailsResponse;
+      if (!response.ok || "error" in payload || payload.details.item.id !== targetItemId) throw new Error("ASSIGNMENTS_REFRESH_FAILED");
+      if (latestItemRef.current?.id !== targetItemId) return;
+
+      setDetails((current) => current && current.item.id === targetItemId ? {
+        ...current,
+        item: payload.details.item,
+        participants: payload.details.participants,
+        assignmentRevision: payload.details.assignmentRevision,
+      } : current);
+      setAssignmentEditor((current) => hydrateItemAssignments(current, targetItemId, payload.details.participants, payload.details.assignmentRevision));
+      setAssignmentConflict(showConflictNotice ? "ready" : null);
+    } catch {
+      if (latestItemRef.current?.id !== targetItemId) return;
+      setAssignmentConflict("error");
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   async function createTrackForDrawer() {
@@ -929,6 +985,9 @@ export function ItemDrawer({ itemId, initialItem, onClose, onChanged, currentUse
                 {!assignmentItemReady && loadState !== "error" ? <p className="muted" role="status">جارٍ تحميل التعيينات... ستتاح الحقول بعد اكتمال التحميل.</p> : null}
                 {assignmentsHydrated && teamAvailability === "empty" ? <p className="muted">لا يوجد أعضاء فريق نشطون متاحون للتعيين.</p> : null}
                 {multiplyAssignedParts.length ? <p className="notice" role="alert">تتضمن هذه المادة أكثر من مكلّف في دور {multiplyAssignedParts.map((part) => assignmentPartLabels[part]).join("، ")}. لا يمكن تعديل التعيينات بأمان من واجهة التعيين الفردي الحالية.</p> : null}
+                {assignmentConflict === "refreshing" ? <p className="muted" role="status">جارٍ تحديث تعيينات الفريق...</p> : null}
+                {assignmentConflict === "ready" ? <div className="notice stack" role="alert"><p>تغيّرت تعيينات الفريق منذ فتح البطاقة. حُدّثت الأدوار الأخرى مع الاحتفاظ بتعديلك المحلي. راجعها ثم أعد الحفظ.</p><button className="button button-secondary" type="button" disabled={!assignmentSaveEnabled} onClick={() => runAction(saveAssignments)}>إعادة محاولة حفظ التعيينات</button></div> : null}
+                {assignmentConflict === "error" ? <div className="notice stack" role="alert"><p>تغيّرت تعيينات الفريق، وتعذر تحميل أحدث القيم. حدّث التعيينات قبل إعادة الحفظ.</p><button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => itemId && runAction(() => refreshAssignmentsAfterConflict(itemId))}>تحديث التعيينات</button></div> : null}
                 <div className="form-grid">
                   <label className="field">الكاتب المسؤول<select className="input" required disabled={assignmentControlsDisabled} value={assignments.writer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "writer_id", event.target.value, canEditAssignments))}><option value="">اختر الكاتب</option>{writers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>
                   <label className="field">المنتج المسؤول<select className="input" disabled={assignmentControlsDisabled} value={assignments.producer_id} onChange={(event) => itemId && setAssignmentEditor((current) => updateItemAssignment(current, itemId, "producer_id", event.target.value, canEditAssignments))}><option value="">—</option>{producers.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}</select></label>

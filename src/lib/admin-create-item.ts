@@ -196,6 +196,8 @@ export function safeRpcError(message: string | undefined, fallback: string) {
     "FIELD_FORBIDDEN:",
     "WRITER_REQUIRED:",
     "ASSIGNEE_ROLE_REQUIRED:",
+    "ASSIGNMENTS_STALE:",
+    "MULTIPLE_ASSIGNMENTS:",
     "INVALID_LINK:",
     "INVALID_TRACK:",
     "INVALID_IDEA_TYPE:",
