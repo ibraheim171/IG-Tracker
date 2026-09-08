@@ -965,6 +965,53 @@ export type Database = {
           },
         ]
       }
+      weekly_reports: {
+        Row: {
+          byte_size: number
+          content_sha256: string
+          created_at: string
+          id: string
+          original_filename: string
+          period_end: string
+          period_start: string
+          storage_path: string
+          title: string
+          uploaded_by: string
+        }
+        Insert: {
+          byte_size: number
+          content_sha256: string
+          created_at?: string
+          id?: string
+          original_filename: string
+          period_end: string
+          period_start: string
+          storage_path: string
+          title: string
+          uploaded_by: string
+        }
+        Update: {
+          byte_size?: number
+          content_sha256?: string
+          created_at?: string
+          id?: string
+          original_filename?: string
+          period_end?: string
+          period_start?: string
+          storage_path?: string
+          title?: string
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "weekly_reports_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tracks: {
         Row: {
           color_hex: string

@@ -9,6 +9,7 @@ const navigationItems = [
   { href: "/ready", label: "جاهز للنشر", icon: "send" },
   { href: "/waiting", label: "بانتظار", icon: "clock" },
   { href: "/my", label: "موادي", icon: "file" },
+  { href: "/insights", label: "الإحصائيات", icon: "stats" },
 ] as const;
 
 function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon"] }) {
@@ -31,6 +32,13 @@ function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="12" cy="12" r="9" />
         <path d="M12 7v5l3 2" />
+      </svg>
+    );
+  }
+  if (name === "stats") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 20V10M12 20V4M19 20v-7" />
       </svg>
     );
   }

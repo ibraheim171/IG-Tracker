@@ -152,6 +152,9 @@ export function AccountMenu({ displayName, roles }: { displayName: string; roles
               <Link className="account-menu-link" role="menuitem" href="/admin/team-view" onClick={() => setOpen(false)}>
                 عرض مهام الفريق
               </Link>
+              <Link className="account-menu-link" role="menuitem" href="/admin/weekly-reports" onClick={() => setOpen(false)}>
+                التقارير الأسبوعية
+              </Link>
               <Link className="account-menu-link" role="menuitem" href="/health" onClick={() => setOpen(false)}>
                 فحص النظام
               </Link>
