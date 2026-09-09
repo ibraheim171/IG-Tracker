@@ -48,6 +48,17 @@ function payloadRowCount(payload: { posts: unknown[]; post_daily: unknown[]; acc
   return payload.posts.length + payload.post_daily.length + payload.account_daily.length + payload.demographics.length + payload.collabs.length;
 }
 
+function syncWriteDiagnostic(error: unknown) {
+  if (!error || typeof error !== "object") return { code: "UNKNOWN" };
+  const value = error as { code?: unknown; message?: unknown; details?: unknown };
+  const text = (part: unknown, limit: number) => typeof part === "string" ? part.slice(0, limit) : undefined;
+  return {
+    code: text(value.code, 80) ?? "UNKNOWN",
+    message: text(value.message, 240),
+    details: text(value.details, 240),
+  };
+}
+
 export async function POST(request: NextRequest) {
   const secret = process.env.ANALYTICS_SYNC_SECRET;
   if (!secret || secret.length < 32) return safeError("E_SYNC_NOT_CONFIGURED", 503);
@@ -99,8 +110,18 @@ export async function POST(request: NextRequest) {
       p_source_timestamp: validated.value.source_timestamp,
       p_request_sha256: analyticsIdempotencyHash(validated.value),
     });
-    if (error || !data) return safeError("E_SYNC_WRITE", 500, { received_count: receivedCount, rejected_count: receivedCount });
-    if (!isTruthfulAcceptedIngestionResult(data, receivedCount)) return safeError("E_SYNC_WRITE", 500, { received_count: receivedCount, rejected_count: receivedCount });
+    if (error || !data) {
+      console.error("Analytics ingestion RPC failed", {
+        receivedCount,
+        hasData: Boolean(data),
+        error: syncWriteDiagnostic(error),
+      });
+      return safeError("E_SYNC_WRITE", 500, { received_count: receivedCount, rejected_count: receivedCount });
+    }
+    if (!isTruthfulAcceptedIngestionResult(data, receivedCount)) {
+      console.error("Analytics ingestion returned inconsistent counts", { receivedCount, data });
+      return safeError("E_SYNC_WRITE", 500, { received_count: receivedCount, rejected_count: receivedCount });
+    }
     return NextResponse.json({
       ok: true,
       replayed: data.replayed === true,
@@ -113,6 +134,7 @@ export async function POST(request: NextRequest) {
       row_counts: data.row_counts,
     }, { status: 202, headers: { "Cache-Control": "no-store" } });
   } catch (caught) {
+    console.error("Analytics ingestion request failed", syncWriteDiagnostic(caught));
     return safeError(caught instanceof Error && caught.message === "E_SERVER_CONFIG" ? "E_SYNC_NOT_CONFIGURED" : "E_SYNC_WRITE", caught instanceof Error && caught.message === "E_SERVER_CONFIG" ? 503 : 500);
   }
 }
