@@ -218,7 +218,7 @@ test("sync stream cancels immediately after the bounded request limit", async ()
 });
 
 test("migration contract makes ingestion atomic/idempotent and database linking one-to-one", () => {
-  const sql = readFileSync("supabase/migrations/20260908164428_analytics_foundation.sql", "utf8");
+  const sql = readFileSync("supabase/migrations/20260909082927_analytics_foundation.sql", "utf8");
   assert.match(sql, /unique \(item_id\)|item_id uuid primary key/i);
   assert.match(sql, /media_id text not null unique/i);
   assert.match(sql, /constraint analytics_sync_runs_idempotency_key_unique unique \(idempotency_key\)/i);

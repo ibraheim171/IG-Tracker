@@ -122,7 +122,7 @@ test("migration, route, and iframe wiring retain the tested server-only security
   const client = readFileSync("src/components/weekly-reports-manager.tsx", "utf8");
   assert.match(client, /sandbox=""/);
   assert.doesNotMatch(client, /dangerouslySetInnerHTML|SUPABASE_SERVICE_ROLE_KEY/);
-  const lifecycleMigration = readFileSync("supabase/migrations/20260908164428_analytics_foundation.sql", "utf8");
+  const lifecycleMigration = readFileSync("supabase/migrations/20260909082927_analytics_foundation.sql", "utf8");
   assert.match(lifecycleMigration, /add column published_at timestamptz/i);
   assert.match(lifecycleMigration, /grant select, insert, update, delete on table public\.weekly_reports to service_role/i);
   const teamPreview = readFileSync("src/app/api/reports/[reportId]/preview/route.ts", "utf8");
