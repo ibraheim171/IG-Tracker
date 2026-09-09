@@ -14,7 +14,7 @@ export function Header({ displayName, roles }: { displayName: string; roles: Rol
           <small>إدارة دورة المحتوى</small>
         </span>
       </div>
-      <AppNavigation />
+      <AppNavigation isAdmin={roles.includes("admin")} />
       <AccountMenu displayName={displayName} roles={roles} />
     </header>
   );
