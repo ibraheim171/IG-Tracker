@@ -18,6 +18,7 @@ import {
   readBoundedAnalyticsBody,
   validateAnalyticsPayload,
   validateManualLink,
+  verifyAnalyticsIdempotencySignature,
   verifyAnalyticsSignature,
 } from "./analytics-core.ts";
 
@@ -134,6 +135,15 @@ test("signed sync rejects missing, invalid, expired signatures and accepts the e
   assert.equal(verifyAnalyticsSignature({ secret, timestamp, signature: "0".repeat(64), rawBody, now: 1788870000000 }).code, "E_SIGNATURE_INVALID");
   assert.equal(verifyAnalyticsSignature({ secret, timestamp, signature, rawBody, now: 1788870400000 }).code, "E_SIGNATURE_EXPIRED");
   assert.equal(verifyAnalyticsSignature({ secret, timestamp: null, signature, rawBody }).code, "E_SIGNATURE_MISSING");
+});
+
+test("wire-safe sender signature authenticates the timestamp and ASCII idempotency key", () => {
+  const secret = "a-local-test-secret-that-is-long-enough";
+  const timestamp = "1788870000";
+  const idempotencyKey = "gas.analytics.0123456789abcdef";
+  const signature = createHmac("sha256", secret).update(timestamp).update(".").update(idempotencyKey).digest("hex");
+  assert.equal(verifyAnalyticsIdempotencySignature({ secret, timestamp, signature, idempotencyKey, now: 1788870000000 }).ok, true);
+  assert.equal(verifyAnalyticsIdempotencySignature({ secret, timestamp, signature, idempotencyKey: "gas.analytics.changed", now: 1788870000000 }).code, "E_SIGNATURE_INVALID");
 });
 
 test("semantic idempotency ignores transport metadata and JSON ordering but detects metric changes", () => {

@@ -206,6 +206,30 @@ export function verifyAnalyticsSignature(input: {
   return { ok: true as const };
 }
 
+/**
+ * Wire-safe sender signature. Google Apps Script and Node can serialize the
+ * same JSON text through different byte paths when Arabic text is present.
+ * The idempotency key is ASCII-only and is independently bound to the payload
+ * by the ingestion RPC, so signing it avoids that transport ambiguity while
+ * retaining HMAC authentication and timestamp freshness.
+ */
+export function verifyAnalyticsIdempotencySignature(input: {
+  secret: string;
+  timestamp: string | null;
+  signature: string | null;
+  idempotencyKey: string | null;
+  now?: number;
+}) {
+  if (!input.timestamp || !/^[0-9]{10}$/.test(input.timestamp)) return { ok: false as const, code: "E_SIGNATURE_MISSING" };
+  if (!input.signature || !/^[0-9a-f]{64}$/i.test(input.signature) || !input.idempotencyKey) return { ok: false as const, code: "E_SIGNATURE_MISSING" };
+  const now = input.now ?? Date.now();
+  if (Math.abs(now - Number(input.timestamp) * 1000) > analyticsSignatureMaxAgeSeconds * 1000) return { ok: false as const, code: "E_SIGNATURE_EXPIRED" };
+  const expected = createHmac("sha256", input.secret).update(input.timestamp).update(".").update(input.idempotencyKey).digest();
+  const actual = Buffer.from(input.signature, "hex");
+  if (actual.byteLength !== expected.byteLength || !timingSafeEqual(actual, expected)) return { ok: false as const, code: "E_SIGNATURE_INVALID" };
+  return { ok: true as const };
+}
+
 export async function readBoundedAnalyticsBody(stream: ReadableStream<Uint8Array> | null, maxBytes = analyticsSyncMaxBytes) {
   if (!stream) throw new Error("E_PAYLOAD_EMPTY");
   const reader = stream.getReader();

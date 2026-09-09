@@ -4,6 +4,7 @@ import {
   readBoundedAnalyticsBody,
   isTruthfulAcceptedIngestionResult,
   validateAnalyticsPayload,
+  verifyAnalyticsIdempotencySignature,
   verifyAnalyticsSignature,
 } from "@/lib/analytics-core";
 import { analyticsServiceClient } from "@/lib/analytics-server";
@@ -58,14 +59,6 @@ export async function POST(request: NextRequest) {
     return safeError(caught instanceof Error && caught.message === "E_PAYLOAD_TOO_LARGE" ? "E_PAYLOAD_TOO_LARGE" : "E_PAYLOAD_EMPTY", caught instanceof Error && caught.message === "E_PAYLOAD_TOO_LARGE" ? 413 : 400);
   }
 
-  const signature = verifyAnalyticsSignature({
-    secret,
-    timestamp: request.headers.get("x-analytics-timestamp"),
-    signature: request.headers.get("x-analytics-signature"),
-    rawBody: bytes,
-  });
-  if (!signature.ok) return safeError(signature.code, 401);
-
   let parsed: unknown;
   try {
     parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
@@ -74,6 +67,25 @@ export async function POST(request: NextRequest) {
   }
   const validated = validateAnalyticsPayload(parsed);
   if (!validated.ok) return safeError(validated.code, 400);
+  const timestampHeader = request.headers.get("x-analytics-timestamp");
+  const signatureHeader = request.headers.get("x-analytics-signature");
+  const signedIdempotencyKey = request.headers.get("x-analytics-idempotency-key");
+  const signature = signedIdempotencyKey
+    ? verifyAnalyticsIdempotencySignature({
+      secret,
+      timestamp: timestampHeader,
+      signature: signatureHeader,
+      idempotencyKey: signedIdempotencyKey,
+    })
+    : verifyAnalyticsSignature({
+      secret,
+      timestamp: timestampHeader,
+      signature: signatureHeader,
+      rawBody: bytes,
+    });
+  if (!signature.ok || (signedIdempotencyKey !== null && signedIdempotencyKey !== validated.value.idempotency_key)) {
+    return safeError(signature.ok ? "E_SIGNATURE_INVALID" : signature.code, 401);
+  }
   const receivedCount = payloadRowCount(validated.value);
 
   try {
