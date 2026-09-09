@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 
 type Post = { media_id: string; published_at: string; media_type: string | null; product_type: string | null; permalink: string; caption: string | null };
-type Item = { id: string; ref: string; title: string; published_at: string | null };
-type LinkAudit = { item_id: string; media_id: string; linked_at: string; linked_by: string | null; reason: string; source: string };
+type Item = { id: string; ref: string; title: string; published_at: string | null; ig_media_id: string | null };
+type LinkAudit = { item_id: string; media_id: string; linked_at: string; linked_by: string | null; reason: string; previous_legacy_media_id: string | null; source: string };
 type State = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; posts: Post[]; items: Item[]; links: LinkAudit[] };
 
 export function AnalyticsLinkReview() {
@@ -48,11 +48,11 @@ export function AnalyticsLinkReview() {
     {state.kind === "ready" && state.posts.length === 0 ? <p className="muted">لا توجد منشورات مستوردة بانتظار الربط.</p> : null}
     {state.kind === "ready" ? state.posts.map((post) => <article className="analytics-link-row" key={post.media_id}>
       <div><strong className="num">{post.media_id}</strong><p className="muted">{mediaTypeLabel(post.media_type, post.product_type)} · <span className="num">{post.published_at}</span></p>{post.caption ? <p>{post.caption}</p> : <p className="muted">لا يوجد مقتطف وصف متاح.</p>}</div>
-      <label className="field">المادة<select className="input" disabled={busyPost === post.media_id} value={itemByPost[post.media_id] ?? ""} onChange={(event) => setItemByPost((current) => ({ ...current, [post.media_id]: event.target.value }))}><option value="">اختر مادة منشورة غير مرتبطة</option>{state.items.map((item) => <option value={item.id} key={item.id}>{item.ref} — {item.title}</option>)}</select></label>
+      <label className="field">المادة<select className="input" disabled={busyPost === post.media_id} value={itemByPost[post.media_id] ?? ""} onChange={(event) => setItemByPost((current) => ({ ...current, [post.media_id]: event.target.value }))}><option value="">اختر مادة منشورة غير مرتبطة</option>{state.items.map((item) => <option value={item.id} key={item.id}>{item.ref} — {item.title}{item.ig_media_id ? " — هوية قديمة ستُراجع وتُسوّى" : ""}</option>)}</select></label>
       <label className="field">سبب الربط<input className="input" disabled={busyPost === post.media_id} value={reasonByPost[post.media_id] ?? ""} onChange={(event) => setReasonByPost((current) => ({ ...current, [post.media_id]: event.target.value }))} /></label>
       <button className="button" type="button" disabled={busyPost !== null || !itemByPost[post.media_id] || (reasonByPost[post.media_id]?.trim().length ?? 0) < 4} onClick={() => link(post)}>{busyPost === post.media_id ? "جارٍ الحفظ…" : "حفظ الربط"}</button>
     </article>) : null}
-    {state.kind === "ready" && state.links.length > 0 ? <details><summary>سجل الربط</summary><div className="table-wrap"><table><thead><tr><th>المادة</th><th>المنشور</th><th>المصدر</th><th>السبب</th><th>وقت الربط</th></tr></thead><tbody>{state.links.map((link) => <tr key={`${link.item_id}-${link.media_id}`}><td className="num">{link.item_id}</td><td className="num">{link.media_id}</td><td>{link.source === "manual" ? "يدوي" : link.source === "exact_permalink" ? "تطابق تام" : "موجود سابقًا"}</td><td>{link.reason}</td><td className="num">{link.linked_at}</td></tr>)}</tbody></table></div></details> : null}
+    {state.kind === "ready" && state.links.length > 0 ? <details><summary>سجل الربط</summary><div className="table-wrap"><table><thead><tr><th>المادة</th><th>المنشور</th><th>الهوية القديمة</th><th>المصدر</th><th>السبب</th><th>وقت الربط</th></tr></thead><tbody>{state.links.map((link) => <tr key={`${link.item_id}-${link.media_id}`}><td className="num">{link.item_id}</td><td className="num">{link.media_id}</td><td className="num">{link.previous_legacy_media_id ?? "—"}</td><td>{link.source === "manual" ? "يدوي" : link.source === "exact_permalink" ? "تطابق تام" : "موجود سابقًا"}</td><td>{link.reason}</td><td className="num">{link.linked_at}</td></tr>)}</tbody></table></div></details> : null}
   </section>;
 }
 

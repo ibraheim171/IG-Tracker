@@ -15,6 +15,10 @@ function metric(value: number | null) {
   return value === null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
+function metricWithMeasuredN(value: number | null, measuredN: number) {
+  return `${metric(value)} (N=${number(measuredN)})`;
+}
+
 function dateTime(value: string) {
   return new Intl.DateTimeFormat("ar-PS", {
     dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Hebron", numberingSystem: "latn",
@@ -112,9 +116,9 @@ function InsightsContent({ snapshot }: { snapshot: InsightsSnapshot }) {
     </section>
 
     <section className="card stack">
-      <div><h2>المقارنات بالوسيط</h2><p className="muted">حجم العيّنة ظاهر دائمًا. مصفوفة الشريك × المسار لا تعرض وسيطًا قبل اكتمال 5 مواد.</p></div>
-      {!snapshot.aggregates?.length ? <p className="muted">لا توجد عيّنة كافية للمقارنة في هذا النطاق.</p> : <div className="table-wrap"><table><thead><tr><th>التجميع</th><th>القيمة</th><th>حجم العيّنة</th><th>وسيط الوصول</th><th>وسيط الحفظ %</th><th>وسيط المشاركة %</th><th>وسيط الإشارة</th></tr></thead><tbody>{snapshot.aggregates.map((row) => <tr key={`${row.dimension}-${row.key}`}><td>{aggregateLabel(row.dimension)}</td><td>{row.name}</td><td className="num">{number(row.n)}</td><td className="num">{metric(row.median_reach)}</td><td className="num">{metric(row.median_save_rate)}</td><td className="num">{metric(row.median_share_rate)}</td><td className="num">{metric(row.median_signal)}</td></tr>)}</tbody></table></div>}
-      {snapshot.partner_track_matrix?.map((row) => <div className="status-count-grid" key={row.key}><div><span>{row.name}</span><strong className="num">N={number(row.n)} · {row.sample_sufficient ? metric(row.median_signal) : "عيّنة غير كافية"}</strong></div></div>)}
+      <div><h2>المقارنات بالوسيط</h2><p className="muted">يظهر عدد المواد المرتبطة منفصلًا عن عدد القياسات الفعلية (N) لكل وسيط. مصفوفة الشريك × المسار تتطلب 5 قياسات غير ناقصة لكل مقياس.</p></div>
+      {!snapshot.aggregates?.length ? <p className="muted">لا توجد عيّنة كافية للمقارنة في هذا النطاق.</p> : <div className="table-wrap"><table><thead><tr><th>التجميع</th><th>القيمة</th><th>المواد المرتبطة</th><th>وسيط الوصول</th><th>وسيط الحفظ %</th><th>وسيط المشاركة %</th><th>وسيط الإشارة</th></tr></thead><tbody>{snapshot.aggregates.map((row) => <tr key={`${row.dimension}-${row.key}`}><td>{aggregateLabel(row.dimension)}</td><td>{row.name}</td><td className="num">{number(row.n)}</td><td className="num">{metricWithMeasuredN(row.median_reach, row.measured_reach_n)}</td><td className="num">{metricWithMeasuredN(row.median_save_rate, row.measured_save_rate_n)}</td><td className="num">{metricWithMeasuredN(row.median_share_rate, row.measured_share_rate_n)}</td><td className="num">{metricWithMeasuredN(row.median_signal, row.measured_signal_n)}</td></tr>)}</tbody></table></div>}
+      {snapshot.partner_track_matrix?.map((row) => <div className="status-count-grid" key={row.key}><div><span>{row.name} · مواد مرتبطة: <span className="num">{number(row.n)}</span></span><strong className="num">وسيط الإشارة: {row.sample_sufficient ? metric(row.median_signal) : "عيّنة غير كافية"} (N={number(row.measured_signal_n)})</strong></div></div>)}
     </section>
 
     <section className="card stack">
@@ -127,7 +131,7 @@ function InsightsContent({ snapshot }: { snapshot: InsightsSnapshot }) {
       <div><h2>سياق التعاون قبل/بعد</h2><p className="muted">هذه المقارنة سياق زمني فقط، ولا تثبت علاقة سببية.</p></div>
       {!snapshot.collabs?.length ? <p className="muted">لا توجد نوافذ تعاون مستوردة ضمن النطاق.</p> : snapshot.collabs.map((row) => <div className="status-count-grid" key={`${row.collaboration_date}-${row.partner}`}><div><span>{row.partner} · <span className="num">{row.collaboration_date}</span></span><strong className="num">{metric(row.reach_lift_pct)}</strong></div></div>)}
     </section>
-    <section className="card stack"><h2>سجل مزامنة القياسات</h2>{!snapshot.sync_runs?.length ? <p className="muted">لا توجد عمليات مزامنة مسجلة.</p> : <div className="table-wrap"><table><thead><tr><th>وقت المصدر</th><th>وقت الاستلام</th><th>الحالة</th><th>المقبول</th><th>المرفوض</th></tr></thead><tbody>{snapshot.sync_runs.map((row) => <tr key={row.id}><td className="num">{row.source_timestamp}</td><td className="num">{row.received_at}</td><td>{syncStatusLabel(row.status)}</td><td className="num">{number(row.accepted_count)}</td><td className="num">{number(row.rejected_count)}</td></tr>)}</tbody></table></div>}</section>
+    <section className="card stack"><h2>سجل مزامنة القياسات</h2>{!snapshot.sync_runs?.length ? <p className="muted">لا توجد عمليات مزامنة مسجلة.</p> : <div className="table-wrap"><table><thead><tr><th>وقت المصدر</th><th>وقت الاستلام</th><th>الحالة</th><th>المستلم</th><th>الجديد</th><th>المحدّث</th><th>الموجود المطابق</th><th>المرفوض</th></tr></thead><tbody>{snapshot.sync_runs.map((row) => <tr key={row.id}><td className="num">{row.source_timestamp}</td><td className="num">{row.received_at}</td><td>{syncStatusLabel(row.status)}</td><td className="num">{number(row.received_count)}</td><td className="num">{number(row.inserted_count)}</td><td className="num">{number(row.updated_count)}</td><td className="num">{number(row.already_present_identical_count)}</td><td className="num">{number(row.rejected_count)}</td></tr>)}</tbody></table></div>}</section>
   </>;
 }
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { matchesAnalyticsMediaFilter } from "./analytics-core.ts";
 import { buildInsightsSnapshot, buildPerformanceAggregates, currentWeekRange, insightUtcBounds, validateInsightRange } from "./insights.ts";
 
 test("current week uses Monday through Sunday in the application time zone", () => {
@@ -81,8 +82,47 @@ test("period aggregates use medians, give every linked partner full credit, and 
   assert.equal(aggregates.find((row) => row.dimension === "month")?.median_reach, 3);
   assert.equal(aggregates.find((row) => row.dimension === "partner" && row.key === "1")?.n, 5);
   assert.equal(aggregates.find((row) => row.dimension === "partner" && row.key === "2")?.n, 5);
+  assert.equal(aggregates.find((row) => row.dimension === "partner_track" && row.key === "1:2")?.measured_reach_n, 5);
   assert.equal(aggregates.find((row) => row.dimension === "partner_track" && row.key === "1:2")?.median_reach, 3);
   const thin = buildPerformanceAggregates(rows.slice(0, 4), links.filter((link) => Number(link.item_id.at(-1)) < 4));
   assert.equal(thin.find((row) => row.dimension === "partner_track")?.median_reach, null);
   assert.equal(thin.find((row) => row.dimension === "partner_track")?.sample_sufficient, false);
+});
+
+test("partner-track guards each nullable median by its measured N, not linked-post N", () => {
+  const rows = [1, 2, 3, 4, 5].map((reach, index) => ({
+    id: `item-null-${index}`,
+    published_at: "2026-09-08T18:00:00Z",
+    track_id: 2,
+    track_name: "نبض المسرى",
+    idea_type_id: 1,
+    idea_type: "منشور",
+    reach,
+    save_rate: index === 0 ? 1 : null,
+    share_rate: null,
+    signal: index === 0 ? 10 : null,
+  }));
+  const links = rows.map((row) => ({ item_id: row.id, partner_id: 1, partner_name: "الشريك" }));
+  const aggregate = buildPerformanceAggregates(rows, links).find((row) => row.dimension === "partner_track");
+  assert.equal(aggregate?.n, 5);
+  assert.equal(aggregate?.measured_reach_n, 5);
+  assert.equal(aggregate?.median_reach, 3);
+  assert.equal(aggregate?.measured_signal_n, 1);
+  assert.equal(aggregate?.median_signal, null);
+  assert.equal(aggregate?.measured_save_rate_n, 1);
+  assert.equal(aggregate?.median_save_rate, null);
+  assert.equal(aggregate?.sample_sufficient, false);
+});
+
+test("source-shaped Reel rows appear in Reel detail and aggregate results", () => {
+  const rows = [
+    { id: "reel", published_at: "2026-09-08T18:00:00Z", media_type: "VIDEO", product_type: "REELS", track_id: null, track_name: null, idea_type_id: null, idea_type: null, reach: 700, save_rate: 2, share_rate: 1, signal: 12 },
+    { id: "feed-video", published_at: "2026-09-08T18:00:00Z", media_type: "VIDEO", product_type: "FEED", track_id: null, track_name: null, idea_type_id: null, idea_type: null, reach: 100, save_rate: 1, share_rate: 1, signal: 2 },
+  ];
+  const reelDetails = rows.filter((row) => matchesAnalyticsMediaFilter(row, "REELS"));
+  assert.deepEqual(reelDetails.map((row) => row.id), ["reel"]);
+  const reelAggregate = buildPerformanceAggregates(reelDetails, []).find((row) => row.dimension === "month");
+  assert.equal(reelAggregate?.n, 1);
+  assert.equal(reelAggregate?.measured_reach_n, 1);
+  assert.equal(reelAggregate?.median_reach, 700);
 });

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { parseAnalyticsMediaFilter } from "@/lib/analytics-core";
 import { requireAnalyticsAdmin } from "@/lib/analytics-auth";
 import { analyticsServiceClient } from "@/lib/analytics-server";
 import { buildInsightsSnapshot, insightUtcBounds, validateInsightRange, type PartnerActivity, type PerformanceAggregate, type PerformanceDetail, type PostCheckpoint } from "@/lib/insights";
@@ -26,14 +27,17 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) return withCookies({ error: auth.error.message, code: auth.error.code }, auth.error.status, sessionResponse);
   const validation = validateInsightRange(request.nextUrl.searchParams.get("start"), request.nextUrl.searchParams.get("end"));
   if (!validation.ok) return withCookies({ error: validation.message, code: "E_DATE_RANGE" }, 400, sessionResponse);
-  const mediaType = request.nextUrl.searchParams.get("media_type");
-  if (mediaType && !/^[A-Za-z0-9_-]{1,64}$/.test(mediaType)) return withCookies({ error: "نوع الوسائط غير صحيح.", code: "E_MEDIA_TYPE" }, 400, sessionResponse);
+  const mediaFilter = parseAnalyticsMediaFilter(request.nextUrl.searchParams.get("media_type"));
+  if (!mediaFilter.ok) return withCookies({ error: "نوع الوسائط غير صحيح.", code: mediaFilter.code }, 400, sessionResponse);
+  const mediaType = mediaFilter.value;
   const { start: periodStart, endExclusive: periodEnd } = insightUtcBounds(validation.range);
   const slotStart = new Date() > new Date(periodStart) ? new Date().toISOString() : periodStart;
   let service;
   try { service = analyticsServiceClient(); } catch { return withCookies({ error: "خدمة الإحصائيات غير مهيأة في هذه البيئة.", code: "E_SERVER_CONFIG" }, 503, sessionResponse); }
   let performanceQuery = service.from("v_item_performance").select("*").gte("published_at", periodStart).lt("published_at", periodEnd).order("published_at", { ascending: false });
-  if (mediaType) performanceQuery = performanceQuery.eq("media_type", mediaType);
+  if (mediaType === "REELS") performanceQuery = performanceQuery.eq("product_type", "REELS");
+  else if (mediaType === "VIDEO") performanceQuery = performanceQuery.eq("media_type", "VIDEO").or("product_type.neq.REELS,product_type.is.null");
+  else if (mediaType) performanceQuery = performanceQuery.eq("media_type", mediaType);
   const results = await Promise.all([
     auth.supabase.from("items").select("id,status,is_archived,published_at"),
     auth.supabase.from("v_slot_board").select("slot_id,slot_at,state,n_items,n_ready").gte("slot_at", slotStart).lt("slot_at", periodEnd).order("slot_at"),
@@ -45,7 +49,7 @@ export async function GET(request: NextRequest) {
     service.from("ig_account_daily").select("date,followers,media_count,reach,views,reach_followers,reach_non_followers,follows,unfollows,missing_metrics").gte("date", validation.range.start).lte("date", validation.range.end).order("date", { ascending: false }),
     service.from("ig_demographics").select("snapshot_date,dimension,key,value").gte("snapshot_date", validation.range.start).lte("snapshot_date", validation.range.end).order("snapshot_date", { ascending: false }),
     service.from("ig_collabs").select("collaboration_date,collaboration_type,follows_lift,reach_lift_pct,nonfollower_lift_pct,partners!inner(name)").gte("collaboration_date", validation.range.start).lte("collaboration_date", validation.range.end).order("collaboration_date", { ascending: false }),
-    service.from("analytics_sync_runs").select("id,source_timestamp,received_at,status,row_counts,accepted_count,rejected_count").order("received_at", { ascending: false }).limit(20),
+    service.from("analytics_sync_runs").select("id,source_timestamp,received_at,status,row_counts,received_count,inserted_count,updated_count,already_present_identical_count,rejected_count").order("received_at", { ascending: false }).limit(20),
   ]);
   if (results.some((result) => result.error)) return withCookies({ error: "تعذر تحميل بيانات الإحصائيات. حاول مرة أخرى.", code: "E_INSIGHTS_LOAD" }, 503, sessionResponse);
   const [items, slots, overdue, waiting, partnerActivity, performance, aggregateRows, account, demographics, collabs, syncRuns] = results;
@@ -67,7 +71,12 @@ export async function GET(request: NextRequest) {
   })) }));
   const aggregates = (aggregateRows.data ?? []).map((row): PerformanceAggregate => ({
     dimension: row.dimension as PerformanceAggregate["dimension"], key: row.dimension_key,
-    name: row.dimension_name, n: row.n, median_reach: row.median_reach,
+    name: row.dimension_name, n: row.n,
+    measured_reach_n: row.measured_reach_n,
+    measured_save_rate_n: row.measured_save_rate_n,
+    measured_share_rate_n: row.measured_share_rate_n,
+    measured_signal_n: row.measured_signal_n,
+    median_reach: row.median_reach,
     median_save_rate: row.median_save_rate, median_share_rate: row.median_share_rate,
     median_signal: row.median_signal, sample_sufficient: row.sample_sufficient,
   }));

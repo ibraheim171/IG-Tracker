@@ -53,11 +53,36 @@ export type PerformanceDetail = {
   idea_type_id: number | null; idea_type: string | null; checkpoints: Record<string, PostCheckpoint | null>;
 };
 export type PostCheckpoint = { age_days: number | null; snapshot_date: string; reach: number | null; saved: number | null; shares: number | null; signal: number | null };
-export type PerformanceAggregate = { dimension: "month" | "track" | "idea_type" | "partner" | "partner_track"; key: string; name: string; n: number; median_reach: number | null; median_save_rate: number | null; median_share_rate: number | null; median_signal: number | null; sample_sufficient: boolean };
+export type PerformanceAggregate = {
+  dimension: "month" | "track" | "idea_type" | "partner" | "partner_track";
+  key: string;
+  name: string;
+  n: number;
+  measured_reach_n: number;
+  measured_save_rate_n: number;
+  measured_share_rate_n: number;
+  measured_signal_n: number;
+  median_reach: number | null;
+  median_save_rate: number | null;
+  median_share_rate: number | null;
+  median_signal: number | null;
+  sample_sufficient: boolean;
+};
 export type AccountDailyInsight = { date: string; followers: number | null; media_count: number | null; reach: number | null; views: number | null; reach_followers: number | null; reach_non_followers: number | null; follows: number | null; unfollows: number | null; missing_metrics: string[] };
 export type DemographicInsight = { snapshot_date: string; dimension: string; key: string; value: number | null };
 export type CollabInsight = { collaboration_date: string; partner: string; collaboration_type: string | null; follows_lift: number | null; reach_lift_pct: number | null; nonfollower_lift_pct: number | null };
-export type SyncRunInsight = { id: string; source_timestamp: string; received_at: string; status: string; row_counts: unknown; accepted_count: number; rejected_count: number };
+export type SyncRunInsight = {
+  id: string;
+  source_timestamp: string;
+  received_at: string;
+  status: string;
+  row_counts: unknown;
+  received_count: number;
+  inserted_count: number;
+  updated_count: number;
+  already_present_identical_count: number;
+  rejected_count: number;
+};
 
 type AggregateRow = Pick<PerformanceDetail, "id" | "published_at" | "track_id" | "track_name" | "idea_type_id" | "idea_type" | "reach" | "save_rate" | "share_rate" | "signal">;
 
@@ -80,16 +105,32 @@ export function buildPerformanceAggregates(rows: AggregateRow[], partnerLinks: A
   }
   return [...groups.values()].map((group) => {
     const n = group.rows.length;
-    const guarded = group.dimension === "partner_track" && n < 5;
+    const reach = group.rows.map((row) => row.reach);
+    const saveRate = group.rows.map((row) => row.save_rate);
+    const shareRate = group.rows.map((row) => row.share_rate);
+    const signal = group.rows.map((row) => row.signal);
+    const measuredReachN = measuredCount(reach);
+    const measuredSaveRateN = measuredCount(saveRate);
+    const measuredShareRateN = measuredCount(shareRate);
+    const measuredSignalN = measuredCount(signal);
+    const guarded = group.dimension === "partner_track";
     return {
       dimension: group.dimension, key: group.key, name: group.name, n,
-      median_reach: guarded ? null : medianValue(group.rows.map((row) => row.reach)),
-      median_save_rate: guarded ? null : medianValue(group.rows.map((row) => row.save_rate)),
-      median_share_rate: guarded ? null : medianValue(group.rows.map((row) => row.share_rate)),
-      median_signal: guarded ? null : medianValue(group.rows.map((row) => row.signal)),
-      sample_sufficient: group.dimension !== "partner_track" || n >= 5,
+      measured_reach_n: measuredReachN,
+      measured_save_rate_n: measuredSaveRateN,
+      measured_share_rate_n: measuredShareRateN,
+      measured_signal_n: measuredSignalN,
+      median_reach: guarded && measuredReachN < 5 ? null : medianValue(reach),
+      median_save_rate: guarded && measuredSaveRateN < 5 ? null : medianValue(saveRate),
+      median_share_rate: guarded && measuredShareRateN < 5 ? null : medianValue(shareRate),
+      median_signal: guarded && measuredSignalN < 5 ? null : medianValue(signal),
+      sample_sufficient: !guarded || measuredSignalN >= 5,
     };
   }).sort((a, b) => a.dimension.localeCompare(b.dimension) || b.n - a.n || a.name.localeCompare(b.name, "ar"));
+}
+
+function measuredCount(values: Array<number | null>) {
+  return values.filter((value) => value !== null).length;
 }
 
 function medianValue(values: Array<number | null>) {

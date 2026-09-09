@@ -11,6 +11,9 @@ import {
   exactPermalinkLinkCandidates,
   guardedPartnerTrackMedian,
   isIncompleteReel,
+  isTruthfulAcceptedIngestionResult,
+  matchesAnalyticsMediaFilter,
+  parseAnalyticsMediaFilter,
   readBoundedAnalyticsBody,
   validateAnalyticsPayload,
   validateManualLink,
@@ -42,7 +45,7 @@ test("automatic matching uses only canonical permalink and never caption, title,
   ];
   const links = exactPermalinkLinkCandidates(posts, [
     { id: "item-exact", ig_permalink: "https://www.instagram.com/p/Ab_C-1/" },
-    { id: "item-similar", ig_permalink: "https://www.instagram.com/p/OTHER/" },
+    { id: "item-similar", ig_permalink: "https://www.instagram.com/p/OTHER/", ig_media_id: "media-1" },
   ]);
   assert.deepEqual(links, [{ item_id: "item-exact", media_id: "media-1", source: "exact_permalink" }]);
 });
@@ -91,10 +94,22 @@ test("Reels with unavailable follows or profile visits are visibly incomplete", 
   assert.equal(isIncompleteReel("IMAGE", basePayload.post_daily[0]), false);
 });
 
-test("partner-track median is hidden below N=5 and median never becomes a mean", () => {
-  assert.equal(guardedPartnerTrackMedian([1, 2, 100], 3), null);
-  assert.equal(guardedPartnerTrackMedian([1, 2, 3, 100, 200], 5), 3);
-  assert.equal(guardedPartnerTrackMedian([1, null, 3, 5, 7], 5), 4);
+test("partner-track median requires five measured values and median never becomes a mean", () => {
+  assert.equal(guardedPartnerTrackMedian([1, 2, 100]), null);
+  assert.equal(guardedPartnerTrackMedian([1, 2, 3, 100, 200]), 3);
+  assert.equal(guardedPartnerTrackMedian([1, null, 3, 5, 7, null]), null);
+  assert.equal(guardedPartnerTrackMedian([1, null, 3, 5, 7, 9]), 5);
+});
+
+test("source-shaped Reels are filtered by product type and excluded from plain video", () => {
+  const reel = { media_type: "VIDEO", product_type: "REELS" };
+  const video = { media_type: "VIDEO", product_type: "FEED" };
+  assert.equal(parseAnalyticsMediaFilter("REELS").value, "REELS");
+  assert.equal(parseAnalyticsMediaFilter("STORY").ok, false);
+  assert.equal(matchesAnalyticsMediaFilter(reel, "REELS"), true);
+  assert.equal(matchesAnalyticsMediaFilter(reel, "VIDEO"), false);
+  assert.equal(matchesAnalyticsMediaFilter(video, "VIDEO"), true);
+  assert.equal(matchesAnalyticsMediaFilter(video, "REELS"), false);
 });
 
 test("only active admins can access raw analytics", () => {
@@ -109,7 +124,13 @@ test("signed sync rejects missing, invalid, expired signatures and accepts the e
   const timestamp = "1788870000";
   const secret = "a-local-test-secret-that-is-long-enough";
   const signature = createHmac("sha256", secret).update(timestamp).update(rawBody).digest("hex");
-  assert.equal(verifyAnalyticsSignature({ secret, timestamp, signature, rawBody, now: 1788870000000 }).ok, true);
+  const verified = verifyAnalyticsSignature({ secret, timestamp, signature, rawBody, now: 1788870000000 });
+  assert.equal(verified.ok, true);
+  const retryTimestamp = "1788870001";
+  const retrySignature = createHmac("sha256", secret).update(retryTimestamp).update(rawBody).digest("hex");
+  const retry = verifyAnalyticsSignature({ secret, timestamp: retryTimestamp, signature: retrySignature, rawBody, now: 1788870001000 });
+  assert.equal(retry.ok, true);
+  assert.equal(verified.ok && retry.ok ? verified.requestSha256 : null, retry.ok ? retry.requestSha256 : null);
   assert.equal(verifyAnalyticsSignature({ secret, timestamp, signature: "0".repeat(64), rawBody, now: 1788870000000 }).code, "E_SIGNATURE_INVALID");
   assert.equal(verifyAnalyticsSignature({ secret, timestamp, signature, rawBody, now: 1788870400000 }).code, "E_SIGNATURE_EXPIRED");
   assert.equal(verifyAnalyticsSignature({ secret, timestamp: null, signature, rawBody }).code, "E_SIGNATURE_MISSING");
@@ -121,6 +142,37 @@ test("sync validation bounds every table and rejects malformed rows before a wri
   assert.equal(validateAnalyticsPayload({ ...basePayload, post_daily: [{ ...basePayload.post_daily[0], reach: -1 }] }).ok, false);
   const oversized = validateAnalyticsPayload({ ...basePayload, posts: Array.from({ length: 501 }, () => basePayload.posts[0]) });
   assert.deepEqual(oversized, { ok: false, code: "E_BATCH_SIZE" });
+  const combinedOversized = validateAnalyticsPayload({ ...basePayload, posts: Array.from({ length: 497 }, () => basePayload.posts[0]) });
+  assert.deepEqual(combinedOversized, { ok: false, code: "E_BATCH_SIZE" });
+});
+
+test("normalized exact duplicate snapshots are idempotent but divergent duplicates reject the batch", () => {
+  const identical = {
+    ...basePayload,
+    post_daily: [basePayload.post_daily[0], { ...basePayload.post_daily[0], missing_metrics: [...basePayload.post_daily[0].missing_metrics].reverse() }],
+    account_daily: [basePayload.account_daily[0], { ...basePayload.account_daily[0], missing_metrics: [...basePayload.account_daily[0].missing_metrics].reverse() }],
+    demographics: [basePayload.demographics[0], { ...basePayload.demographics[0], dimension: " city ", key: " القدس " }],
+    collabs: [basePayload.collabs[0], { ...basePayload.collabs[0], partner: " شريك ", type: " collab " }],
+  };
+  assert.equal(validateAnalyticsPayload(identical).ok, true);
+  assert.deepEqual(validateAnalyticsPayload({
+    ...basePayload,
+    post_daily: [basePayload.post_daily[0], { ...basePayload.post_daily[0], reach: 101 }],
+  }), { ok: false, code: "E_DIVERGENT_DUPLICATE" });
+  assert.equal(isTruthfulAcceptedIngestionResult({
+    received_count: 5,
+    inserted_count: 0,
+    updated_count: 0,
+    already_present_identical_count: 5,
+    rejected_count: 0,
+  }, 5), true);
+  assert.equal(isTruthfulAcceptedIngestionResult({
+    received_count: 5,
+    inserted_count: 5,
+    updated_count: 0,
+    already_present_identical_count: 5,
+    rejected_count: 0,
+  }, 5), false);
 });
 
 test("sync stream cancels immediately after the bounded request limit", async () => {
@@ -130,20 +182,42 @@ test("sync stream cancels immediately after the bounded request limit", async ()
   assert.equal(cancelled, true);
 });
 
-test("migration makes ingestion atomic/idempotent and database linking one-to-one", () => {
+test("migration contract makes ingestion atomic/idempotent and database linking one-to-one", () => {
   const sql = readFileSync("supabase/migrations/20260908164428_analytics_foundation.sql", "utf8");
   assert.match(sql, /unique \(item_id\)|item_id uuid primary key/i);
   assert.match(sql, /media_id text not null unique/i);
   assert.match(sql, /insert into public\.analytics_sync_runs[\s\S]+on conflict do nothing returning id into run_id/i);
   assert.match(sql, /if run_id is null then return jsonb_build_object\('replayed', true\)/i);
-  assert.match(sql, /insert into public\.ig_item_links[\s\S]+canonical_instagram_permalink\(i\.ig_permalink\) = public\.canonical_instagram_permalink\(p\.permalink\)/i);
-  assert.doesNotMatch(sql, /similarity|day_gap|join[^;]+caption|date proximity/i);
-  assert.match(sql, /revoke all on table[\s\S]+public\.ig_post_daily[\s\S]+from public, anon, authenticated/i);
-  assert.match(sql, /revoke all on table public\.v_post_latest[\s\S]+public\.v_conflict_orphan_posts[\s\S]+from public, anon, authenticated/i);
+  assert.match(sql, /unique \(signature_timestamp, request_sha256\)/i);
+  assert.doesNotMatch(sql, /idempotency_key text not null unique|request_sha256 text not null unique/i);
+  assert.match(sql, /pg_advisory_xact_lock\(hashtext\('analytics-ingestion-v1'\)\)[\s\S]+lock table public\.ig_posts[\s\S]+DIVERGENT_POST_DAILY_SNAPSHOT/i);
+  assert.ok(sql.indexOf("DIVERGENT_POST_DAILY_SNAPSHOT") < sql.indexOf("insert into public.ig_posts (media_id"));
+  assert.match(sql, /jsonb_array_length[\s\S]+> 500[\s\S]+BATCH_TOO_LARGE/i);
+  assert.match(sql, /received_count[\s\S]+inserted_count[\s\S]+already_present_identical_count[\s\S]+rejected_count/i);
+  assert.doesNotMatch(sql, /insert into public\.ig_post_daily[\s\S]{0,1500}on conflict[^;]+do nothing/i);
+  assert.match(sql, /insert into public\.ig_item_links[\s\S]+canonical_instagram_permalink\(i\.ig_permalink\) is not null[\s\S]+canonical_instagram_permalink\(p\.permalink\) is not null/i);
+  assert.match(sql, /i\.ig_media_id is null or i\.ig_media_id = p\.media_id/i);
+  assert.doesNotMatch(sql, /i\.ig_shortcode\s*=\s*p\.shortcode/i);
+  assert.doesNotMatch(sql, /join[^;]+caption|date proximity/i);
+  assert.match(sql, /insert into public\.ig_item_links[\s\S]+join public\.ig_posts p on p\.media_id = i\.ig_media_id[\s\S]+canonical_instagram_permalink\(i\.ig_permalink\)[\s\S]+canonical_instagram_permalink\(p\.permalink\)/i);
+  assert.match(sql, /v_item_performance[\s\S]+join public\.ig_item_links l on l\.item_id = i\.id/i);
+  assert.match(sql, /previous_legacy_media_id[\s\S]+case when target_item\.ig_media_id is distinct from p_media_id then target_item\.ig_media_id end/i);
+  assert.match(sql, /guard_item_analytics_identity[\s\S]+AUTHORITATIVE_ANALYTICS_LINK_REQUIRED[\s\S]+items_analytics_identity_guard/i);
+  assert.match(sql, /revoke all on table[\s\S]+public\.ig_post_daily[\s\S]+from public, anon, authenticated, service_role/i);
+  assert.match(sql, /grant select on table public\.ig_posts, public\.ig_post_daily[\s\S]+to service_role/i);
+  assert.doesNotMatch(sql, /grant (?:insert|update|delete)[^;]+public\.ig_post_daily[^;]+to service_role/i);
+  assert.match(sql, /revoke all on table public\.v_post_latest[\s\S]+public\.v_conflict_orphan_posts[\s\S]+from public, anon, authenticated, service_role/i);
   assert.match(sql, /security definer[\s\S]+set search_path = pg_catalog, public/i);
-  assert.match(sql, /function public\.admin_analytics_aggregates[\s\S]+is_active_user\(\)[\s\S]+is_admin\(\)[\s\S]+percentile_cont\(0\.5\)[\s\S]+count\(\*\) >= 5/i);
+  assert.match(sql, /function public\.admin_analytics_aggregates[\s\S]+is_active_user\(\)[\s\S]+is_admin\(\)[\s\S]+percentile_cont\(0\.5\)[\s\S]+count\(v\.signal\) >= 5/i);
   assert.match(sql, /grant execute on function public\.admin_analytics_aggregates\(date, date, text\) to authenticated/i);
   assert.match(sql, /revoke all on function public\.ingest_analytics_batch[\s\S]+grant execute[\s\S]+to service_role/i);
+  assert.doesNotMatch(sql, /set views = null[\s\S]+where date </i);
+  assert.match(sql, /perform public\.assert_can_use_app\(\)[\s\S]+public\.can_publish_items\(\)[\s\S]+ARCHIVED_IMMUTABLE[\s\S]+set_config\('app\.rpc'[\s\S]+insert into public\.transitions[\s\S]+refresh_slot_state/i);
+  const insightsRoute = readFileSync("src/app/api/insights/route.ts", "utf8");
+  assert.match(insightsRoute, /mediaType === "REELS"[\s\S]+eq\("product_type", "REELS"\)/);
+  assert.match(insightsRoute, /mediaType === "VIDEO"[\s\S]+eq\("media_type", "VIDEO"\)[\s\S]+product_type\.neq\.REELS/);
+  const linkReviewRoute = readFileSync("src/app/api/admin/analytics-links/route.ts", "utf8");
+  assert.doesNotMatch(linkReviewRoute, /!row\.ig_media_id/);
   for (const clientPath of ["src/components/insights-dashboard.tsx", "src/components/analytics-link-review.tsx"]) {
     assert.doesNotMatch(readFileSync(clientPath, "utf8"), /SUPABASE_SERVICE_ROLE_KEY|createClient\s*\(/);
   }

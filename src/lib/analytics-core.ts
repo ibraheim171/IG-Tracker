@@ -3,6 +3,24 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 export const analyticsSyncMaxBytes = 1024 * 1024;
 export const analyticsSyncMaxRows = 500;
 export const analyticsSignatureMaxAgeSeconds = 300;
+export const analyticsMediaFilters = ["IMAGE", "CAROUSEL_ALBUM", "VIDEO", "REELS"] as const;
+export type AnalyticsMediaFilter = typeof analyticsMediaFilters[number];
+
+export type AnalyticsIngestionCounts = {
+  received_count?: number;
+  inserted_count?: number;
+  updated_count?: number;
+  already_present_identical_count?: number;
+  rejected_count?: number;
+};
+
+export function isTruthfulAcceptedIngestionResult(data: AnalyticsIngestionCounts, expectedReceived: number) {
+  const values = [data.received_count, data.inserted_count, data.updated_count, data.already_present_identical_count, data.rejected_count];
+  return values.every((value) => Number.isSafeInteger(value) && value! >= 0)
+    && data.received_count === expectedReceived
+    && data.rejected_count === 0
+    && data.inserted_count! + data.updated_count! + data.already_present_identical_count! === data.received_count;
+}
 
 export function canAccessRawAnalytics(profile: { active: boolean; roles: string[] } | null) {
   return Boolean(profile?.active && profile.roles.includes("admin"));
@@ -58,7 +76,7 @@ export function instagramShortcode(value: string) {
   return canonicalInstagramPermalink(value)?.split("/")[4] ?? null;
 }
 
-export function exactPermalinkLinkCandidates(posts: AnalyticsPost[], items: Array<{ id: string; ig_permalink: string | null }>) {
+export function exactPermalinkLinkCandidates(posts: AnalyticsPost[], items: Array<{ id: string; ig_permalink: string | null; ig_media_id?: string | null }>) {
   const itemByIdentity = new Map<string, string[]>();
   for (const item of items) {
     if (!item.ig_permalink) continue;
@@ -73,6 +91,23 @@ export function exactPermalinkLinkCandidates(posts: AnalyticsPost[], items: Arra
     const matches = key ? itemByIdentity.get(key) ?? [] : [];
     return matches.length === 1 ? [{ item_id: matches[0], media_id: post.post_id, source: "exact_permalink" as const }] : [];
   });
+}
+
+export function parseAnalyticsMediaFilter(value: string | null) {
+  if (!value) return { ok: true as const, value: null };
+  return analyticsMediaFilters.includes(value as AnalyticsMediaFilter)
+    ? { ok: true as const, value: value as AnalyticsMediaFilter }
+    : { ok: false as const, code: "E_MEDIA_TYPE" };
+}
+
+export function matchesAnalyticsMediaFilter(
+  row: Pick<AnalyticsPost, "media_type" | "product_type">,
+  filter: AnalyticsMediaFilter | null,
+) {
+  if (!filter) return true;
+  if (filter === "REELS") return row.product_type === "REELS";
+  if (filter === "VIDEO") return row.media_type === "VIDEO" && row.product_type !== "REELS";
+  return row.media_type === filter;
 }
 
 export function validateManualLink(input: { itemId?: unknown; mediaId?: unknown; reason?: unknown }) {
@@ -117,8 +152,8 @@ export function median(values: Array<number | null>) {
   return measured.length % 2 === 0 ? (measured[middle - 1] + measured[middle]) / 2 : measured[middle];
 }
 
-export function guardedPartnerTrackMedian(values: Array<number | null>, sampleSize: number) {
-  return sampleSize >= 5 ? median(values) : null;
+export function guardedPartnerTrackMedian(values: Array<number | null>) {
+  return values.filter((value) => value !== null).length >= 5 ? median(values) : null;
 }
 
 export function verifyAnalyticsSignature(input: {
@@ -170,12 +205,93 @@ export function validateAnalyticsPayload(value: unknown): { ok: true; value: Ana
   if (typeof value.idempotency_key !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(value.idempotency_key)) return { ok: false, code: "E_IDEMPOTENCY" };
   if (!isTimestamp(value.source_timestamp)) return { ok: false, code: "E_SOURCE_TIMESTAMP" };
   const arrays = [value.posts, value.post_daily, value.account_daily, value.demographics, value.collabs];
-  if (arrays.some((rows) => !Array.isArray(rows) || rows.length > analyticsSyncMaxRows)) return { ok: false, code: "E_BATCH_SIZE" };
+  if (arrays.some((rows) => !Array.isArray(rows))) return { ok: false, code: "E_BATCH_SIZE" };
+  if ((arrays as unknown[][]).reduce((total, rows) => total + rows.length, 0) > analyticsSyncMaxRows) return { ok: false, code: "E_BATCH_SIZE" };
   const [posts, postDaily, accountDaily, demographics, collabs] = arrays as unknown[][];
   if (!posts.every(isPost) || !postDaily.every(isPostDaily) || !accountDaily.every(isAccountDaily) || !demographics.every(isDemographic) || !collabs.every(isCollab)) return { ok: false, code: "E_ROW" };
   const postIds = new Set((posts as AnalyticsPost[]).map((row) => row.post_id));
   if ((postDaily as PostDailyInput[]).some((row) => !postIds.has(row.post_id))) return { ok: false, code: "E_POST_REFERENCE" };
+  if (
+    hasDivergentDuplicate(posts, (row) => String(row.post_id), normalizePost)
+    || hasDivergentDuplicate(postDaily, (row) => `${row.post_id}\u0000${row.snapshot_date}`, normalizePostDaily)
+    || hasDivergentDuplicate(accountDaily, (row) => String(row.date), normalizeAccountDaily)
+    || hasDivergentDuplicate(demographics, (row) => `${row.snapshot_date}\u0000${String(row.dimension).trim()}\u0000${String(row.key).trim()}`, normalizeDemographic)
+    || hasDivergentDuplicate(collabs, (row) => `${row.date}\u0000${String(row.partner).trim()}\u0000${normalizeOptionalText(row.type) ?? ""}`, normalizeCollab)
+  ) return { ok: false, code: "E_DIVERGENT_DUPLICATE" };
   return { ok: true, value: value as unknown as AnalyticsSyncPayload };
+}
+
+function hasDivergentDuplicate(
+  rows: unknown[],
+  keyOf: (row: Record<string, unknown>) => string,
+  normalize: (row: Record<string, unknown>) => unknown,
+) {
+  const seen = new Map<string, string>();
+  for (const candidate of rows) {
+    const row = candidate as Record<string, unknown>;
+    const key = keyOf(row);
+    const semantic = JSON.stringify(normalize(row));
+    const prior = seen.get(key);
+    if (prior !== undefined && prior !== semantic) return true;
+    seen.set(key, semantic);
+  }
+  return false;
+}
+
+function normalizePost(row: Record<string, unknown>) {
+  return {
+    post_id: row.post_id,
+    published_at: row.published_at,
+    media_type: normalizeOptionalText(row.media_type),
+    product_type: normalizeOptionalText(row.product_type),
+    permalink: canonicalInstagramPermalink(String(row.permalink)),
+    caption: typeof row.caption === "string" ? row.caption.slice(0, 500) || null : null,
+  };
+}
+
+function normalizePostDaily(row: Record<string, unknown>) {
+  return {
+    snapshot_date: row.snapshot_date, post_id: row.post_id, age_days: row.age_days,
+    likes: row.likes, comments: row.comments, reach: row.reach, views: row.views,
+    saved: row.saved, shares: row.shares, interactions: row.interactions,
+    profile_visits: row.profile_visits, follows: row.follows, avg_watch_ms: row.avg_watch_ms,
+    missing_metrics: normalizeMetricNames(row.missing_metrics),
+  };
+}
+
+function normalizeAccountDaily(row: Record<string, unknown>) {
+  return {
+    date: row.date, followers: row.followers, media_count: row.media_count,
+    reach: row.reach, views: row.views, reach_followers: row.reach_followers,
+    reach_non_followers: row.reach_non_followers, follows: row.follows,
+    unfollows: row.unfollows, missing_metrics: normalizeMetricNames(row.missing_metrics),
+  };
+}
+
+function normalizeDemographic(row: Record<string, unknown>) {
+  return { snapshot_date: row.snapshot_date, dimension: String(row.dimension).trim(), key: String(row.key).trim(), value: row.value };
+}
+
+function normalizeCollab(row: Record<string, unknown>) {
+  return {
+    date: row.date, partner: String(row.partner).trim(), type: normalizeOptionalText(row.type),
+    notes: normalizeOptionalText(row.notes), net_follows_before: row.net_follows_before,
+    net_follows_after: row.net_follows_after, follows_lift: row.follows_lift,
+    reach_before: row.reach_before, reach_after: row.reach_after,
+    reach_lift_pct: row.reach_lift_pct, nonfollower_before: row.nonfollower_before,
+    nonfollower_after: row.nonfollower_after, nonfollower_lift_pct: row.nonfollower_lift_pct,
+    computed_at: row.computed_at,
+  };
+}
+
+function normalizeMetricNames(value: unknown) {
+  return [...new Set(value as string[])].sort();
+}
+
+function normalizeOptionalText(value: unknown) {
+  if (value === null) return null;
+  if (typeof value !== "string") return value;
+  return value.trim() || null;
 }
 
 function isPost(value: unknown): value is AnalyticsPost {

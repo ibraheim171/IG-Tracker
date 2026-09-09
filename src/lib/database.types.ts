@@ -233,9 +233,9 @@ export type Database = {
         Relationships: []
       }
       analytics_sync_runs: {
-        Row: { accepted_count: number; completed_at: string | null; id: string; idempotency_key: string; received_at: string; rejected_count: number; request_sha256: string; row_counts: Json; safe_error_summary: string | null; signature_timestamp: string; source_timestamp: string; status: string }
-        Insert: { accepted_count?: number; completed_at?: string | null; id?: string; idempotency_key: string; received_at?: string; rejected_count?: number; request_sha256: string; row_counts?: Json; safe_error_summary?: string | null; signature_timestamp: string; source_timestamp: string; status: string }
-        Update: { accepted_count?: number; completed_at?: string | null; id?: string; idempotency_key?: string; received_at?: string; rejected_count?: number; request_sha256?: string; row_counts?: Json; safe_error_summary?: string | null; signature_timestamp?: string; source_timestamp?: string; status?: string }
+        Row: { already_present_identical_count: number; completed_at: string | null; id: string; idempotency_key: string; inserted_count: number; received_at: string; received_count: number; rejected_count: number; request_sha256: string; row_counts: Json; safe_error_summary: string | null; signature_timestamp: string; source_timestamp: string; status: string; updated_count: number }
+        Insert: { already_present_identical_count?: number; completed_at?: string | null; id?: string; idempotency_key: string; inserted_count?: number; received_at?: string; received_count?: number; rejected_count?: number; request_sha256: string; row_counts?: Json; safe_error_summary?: string | null; signature_timestamp: string; source_timestamp: string; status: string; updated_count?: number }
+        Update: { already_present_identical_count?: number; completed_at?: string | null; id?: string; idempotency_key?: string; inserted_count?: number; received_at?: string; received_count?: number; rejected_count?: number; request_sha256?: string; row_counts?: Json; safe_error_summary?: string | null; signature_timestamp?: string; source_timestamp?: string; status?: string; updated_count?: number }
         Relationships: []
       }
       ig_account_daily: {
@@ -315,18 +315,18 @@ export type Database = {
         ]
       }
       ig_collabs: {
-        Row: { collaboration_date: string; collaboration_type: string | null; computed_at: string | null; created_at: string; follows_lift: number | null; id: string; net_follows_after: number | null; net_follows_before: number | null; nonfollower_after: number | null; nonfollower_before: number | null; nonfollower_lift_pct: number | null; notes: string | null; partner_id: number; reach_after: number | null; reach_before: number | null; reach_lift_pct: number | null; sync_run_id: string }
-        Insert: { collaboration_date: string; collaboration_type?: string | null; computed_at?: string | null; created_at?: string; follows_lift?: number | null; id?: string; net_follows_after?: number | null; net_follows_before?: number | null; nonfollower_after?: number | null; nonfollower_before?: number | null; nonfollower_lift_pct?: number | null; notes?: string | null; partner_id: number; reach_after?: number | null; reach_before?: number | null; reach_lift_pct?: number | null; sync_run_id: string }
-        Update: { collaboration_date?: string; collaboration_type?: string | null; computed_at?: string | null; created_at?: string; follows_lift?: number | null; id?: string; net_follows_after?: number | null; net_follows_before?: number | null; nonfollower_after?: number | null; nonfollower_before?: number | null; nonfollower_lift_pct?: number | null; notes?: string | null; partner_id?: number; reach_after?: number | null; reach_before?: number | null; reach_lift_pct?: number | null; sync_run_id?: string }
+        Row: { collaboration_date: string; collaboration_type: string | null; computed_at: string | null; created_at: string; follows_lift: number | null; id: string; net_follows_after: number | null; net_follows_before: number | null; nonfollower_after: number | null; nonfollower_before: number | null; nonfollower_lift_pct: number | null; notes: string | null; partner_id: number; reach_after: number | null; reach_before: number | null; reach_lift_pct: number | null; source_timestamp: string; sync_run_id: string }
+        Insert: { collaboration_date: string; collaboration_type?: string | null; computed_at?: string | null; created_at?: string; follows_lift?: number | null; id?: string; net_follows_after?: number | null; net_follows_before?: number | null; nonfollower_after?: number | null; nonfollower_before?: number | null; nonfollower_lift_pct?: number | null; notes?: string | null; partner_id: number; reach_after?: number | null; reach_before?: number | null; reach_lift_pct?: number | null; source_timestamp: string; sync_run_id: string }
+        Update: { collaboration_date?: string; collaboration_type?: string | null; computed_at?: string | null; created_at?: string; follows_lift?: number | null; id?: string; net_follows_after?: number | null; net_follows_before?: number | null; nonfollower_after?: number | null; nonfollower_before?: number | null; nonfollower_lift_pct?: number | null; notes?: string | null; partner_id?: number; reach_after?: number | null; reach_before?: number | null; reach_lift_pct?: number | null; source_timestamp?: string; sync_run_id?: string }
         Relationships: [
           { foreignKeyName: "ig_collabs_partner_id_fkey"; columns: ["partner_id"]; isOneToOne: false; referencedRelation: "partners"; referencedColumns: ["id"] },
           { foreignKeyName: "ig_collabs_sync_run_id_fkey"; columns: ["sync_run_id"]; isOneToOne: false; referencedRelation: "analytics_sync_runs"; referencedColumns: ["id"] },
         ]
       }
       ig_item_links: {
-        Row: { item_id: string; linked_at: string; linked_by: string | null; media_id: string; reason: string; source: string }
-        Insert: { item_id: string; linked_at?: string; linked_by?: string | null; media_id: string; reason: string; source: string }
-        Update: { item_id?: string; linked_at?: string; linked_by?: string | null; media_id?: string; reason?: string; source?: string }
+        Row: { item_id: string; linked_at: string; linked_by: string | null; media_id: string; previous_legacy_media_id: string | null; reason: string; source: string }
+        Insert: { item_id: string; linked_at?: string; linked_by?: string | null; media_id: string; previous_legacy_media_id?: string | null; reason: string; source: string }
+        Update: { item_id?: string; linked_at?: string; linked_by?: string | null; media_id?: string; previous_legacy_media_id?: string | null; reason?: string; source?: string }
         Relationships: [
           { foreignKeyName: "ig_item_links_item_id_fkey"; columns: ["item_id"]; isOneToOne: true; referencedRelation: "items"; referencedColumns: ["id"] },
           { foreignKeyName: "ig_item_links_linked_by_fkey"; columns: ["linked_by"]; isOneToOne: false; referencedRelation: "profiles"; referencedColumns: ["id"] },
@@ -1508,6 +1508,10 @@ export type Database = {
           median_save_rate: number | null
           median_share_rate: number | null
           median_signal: number | null
+          measured_reach_n: number
+          measured_save_rate_n: number
+          measured_share_rate_n: number
+          measured_signal_n: number
           n: number
           sample_sufficient: boolean
         }[]
