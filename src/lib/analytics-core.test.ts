@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  analyticsIdempotencyHash,
   analyticsSyncMaxBytes,
   canAccessRawAnalytics,
   canonicalInstagramPermalink,
@@ -130,10 +131,44 @@ test("signed sync rejects missing, invalid, expired signatures and accepts the e
   const retrySignature = createHmac("sha256", secret).update(retryTimestamp).update(rawBody).digest("hex");
   const retry = verifyAnalyticsSignature({ secret, timestamp: retryTimestamp, signature: retrySignature, rawBody, now: 1788870001000 });
   assert.equal(retry.ok, true);
-  assert.equal(verified.ok && retry.ok ? verified.requestSha256 : null, retry.ok ? retry.requestSha256 : null);
   assert.equal(verifyAnalyticsSignature({ secret, timestamp, signature: "0".repeat(64), rawBody, now: 1788870000000 }).code, "E_SIGNATURE_INVALID");
   assert.equal(verifyAnalyticsSignature({ secret, timestamp, signature, rawBody, now: 1788870400000 }).code, "E_SIGNATURE_EXPIRED");
   assert.equal(verifyAnalyticsSignature({ secret, timestamp: null, signature, rawBody }).code, "E_SIGNATURE_MISSING");
+});
+
+test("semantic idempotency ignores transport metadata and JSON ordering but detects metric changes", () => {
+  const payload = {
+    ...basePayload,
+    posts: [
+      ...basePayload.posts,
+      { ...basePayload.posts[0], post_id: "media-2", permalink: "https://instagram.com/p/Second/" },
+    ],
+    post_daily: [
+      ...basePayload.post_daily,
+      { ...basePayload.post_daily[0], post_id: "media-2", reach: 250, missing_metrics: ["follows", "views"] },
+    ],
+  };
+  const reverseJsonOrder = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(reverseJsonOrder).reverse();
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .reverse()
+          .map(([key, child]) => [key, reverseJsonOrder(child)]),
+      );
+    }
+    return value;
+  };
+  const baselineHash = analyticsIdempotencyHash(payload);
+  const reordered = JSON.parse(JSON.stringify(reverseJsonOrder(payload))) as typeof payload;
+
+  assert.equal(analyticsIdempotencyHash(reordered), baselineHash);
+  assert.equal(analyticsIdempotencyHash({ ...payload, idempotency_key: "different-run-key" }), baselineHash);
+  assert.equal(analyticsIdempotencyHash({ ...payload, source_timestamp: "2026-09-09T09:30:00Z" }), baselineHash);
+  assert.notEqual(
+    analyticsIdempotencyHash({ ...payload, post_daily: [{ ...payload.post_daily[0], reach: 101 }, payload.post_daily[1]] }),
+    baselineHash,
+  );
 });
 
 test("sync validation bounds every table and rejects malformed rows before a write", () => {
@@ -186,10 +221,14 @@ test("migration contract makes ingestion atomic/idempotent and database linking 
   const sql = readFileSync("supabase/migrations/20260908164428_analytics_foundation.sql", "utf8");
   assert.match(sql, /unique \(item_id\)|item_id uuid primary key/i);
   assert.match(sql, /media_id text not null unique/i);
-  assert.match(sql, /insert into public\.analytics_sync_runs[\s\S]+on conflict do nothing returning id into run_id/i);
-  assert.match(sql, /if run_id is null then return jsonb_build_object\('replayed', true\)/i);
-  assert.match(sql, /unique \(signature_timestamp, request_sha256\)/i);
-  assert.doesNotMatch(sql, /idempotency_key text not null unique|request_sha256 text not null unique/i);
+  assert.match(sql, /constraint analytics_sync_runs_idempotency_key_unique unique \(idempotency_key\)/i);
+  assert.doesNotMatch(sql, /unique \(signature_timestamp, request_sha256\)|request_sha256 text not null unique/i);
+  const ingestionFunction = sql.slice(sql.indexOf("create or replace function public.ingest_analytics_batch"));
+  assert.match(ingestionFunction, /select \* into existing_run\s+from public\.analytics_sync_runs\s+where idempotency_key = p_idempotency_key\s+for update/i);
+  assert.match(ingestionFunction, /existing_run\.request_sha256 is distinct from p_request_sha256[\s\S]+IDEMPOTENCY_KEY_REUSED/i);
+  assert.match(ingestionFunction, /existing_run\.status = 'accepted'[\s\S]+'replayed', true[\s\S]+'run_id', existing_run\.id[\s\S]+'received_count', existing_run\.received_count[\s\S]+'row_counts', existing_run\.row_counts/i);
+  assert.ok(ingestionFunction.indexOf("raise exception 'IDEMPOTENCY_KEY_REUSED'") < ingestionFunction.indexOf("insert into public.analytics_sync_runs"));
+  assert.doesNotMatch(ingestionFunction, /on conflict do nothing returning id into run_id|signature_timestamp\s*=\s*p_signature_timestamp/);
   assert.match(sql, /pg_advisory_xact_lock\(hashtext\('analytics-ingestion-v1'\)\)[\s\S]+lock table public\.ig_posts[\s\S]+DIVERGENT_POST_DAILY_SNAPSHOT/i);
   assert.ok(sql.indexOf("DIVERGENT_POST_DAILY_SNAPSHOT") < sql.indexOf("insert into public.ig_posts (media_id"));
   assert.match(sql, /jsonb_array_length[\s\S]+> 500[\s\S]+BATCH_TOO_LARGE/i);
@@ -202,6 +241,12 @@ test("migration contract makes ingestion atomic/idempotent and database linking 
   assert.match(sql, /insert into public\.ig_item_links[\s\S]+join public\.ig_posts p on p\.media_id = i\.ig_media_id[\s\S]+canonical_instagram_permalink\(i\.ig_permalink\)[\s\S]+canonical_instagram_permalink\(p\.permalink\)/i);
   assert.match(sql, /v_item_performance[\s\S]+join public\.ig_item_links l on l\.item_id = i\.id/i);
   assert.match(sql, /previous_legacy_media_id[\s\S]+case when target_item\.ig_media_id is distinct from p_media_id then target_item\.ig_media_id end/i);
+  const linkFunction = sql.slice(
+    sql.indexOf("create or replace function public.admin_link_instagram_post"),
+    sql.indexOf("create or replace function public.ingest_analytics_batch"),
+  );
+  assert.ok(linkFunction.indexOf("pg_advisory_xact_lock(hashtext('analytics-ingestion-v1'))") < linkFunction.indexOf("pg_advisory_xact_lock(hashtext('ig-item-link:'"));
+  assert.ok(linkFunction.indexOf("pg_advisory_xact_lock(hashtext('ig-item-link:'") < linkFunction.indexOf("select * into target_item"));
   assert.match(sql, /guard_item_analytics_identity[\s\S]+AUTHORITATIVE_ANALYTICS_LINK_REQUIRED[\s\S]+items_analytics_identity_guard/i);
   assert.match(sql, /revoke all on table[\s\S]+public\.ig_post_daily[\s\S]+from public, anon, authenticated, service_role/i);
   assert.match(sql, /grant select on table public\.ig_posts, public\.ig_post_daily[\s\S]+to service_role/i);
@@ -211,11 +256,34 @@ test("migration contract makes ingestion atomic/idempotent and database linking 
   assert.match(sql, /function public\.admin_analytics_aggregates[\s\S]+is_active_user\(\)[\s\S]+is_admin\(\)[\s\S]+percentile_cont\(0\.5\)[\s\S]+count\(v\.signal\) >= 5/i);
   assert.match(sql, /grant execute on function public\.admin_analytics_aggregates\(date, date, text\) to authenticated/i);
   assert.match(sql, /revoke all on function public\.ingest_analytics_batch[\s\S]+grant execute[\s\S]+to service_role/i);
+  const immutablePreflight = ingestionFunction.slice(
+    ingestionFunction.indexOf("select 1 from pg_temp.analytics_incoming_post_daily"),
+    ingestionFunction.indexOf("select count(*) into posts_received"),
+  );
+  assert.doesNotMatch(immutablePreflight, /e\.source_timestamp|t\.source_timestamp/);
+  const trackMonthView = sql.slice(sql.indexOf("create or replace view public.v_track_month"), sql.indexOf("create or replace view public.v_partner_month"));
+  const partnerMonthView = sql.slice(sql.indexOf("create or replace view public.v_partner_month"), sql.indexOf("create or replace view public.v_partner_track"));
+  const partnerTrackView = sql.slice(sql.indexOf("create or replace view public.v_partner_track"), sql.indexOf("create or replace view public.v_conflict_link_unresolved"));
+  for (const viewSql of [trackMonthView, partnerMonthView]) {
+    assert.match(viewSql, /case when count\([^)]*reach\) > 0 then percentile_cont\(0\.5\)[\s\S]+median_reach/i);
+    assert.match(viewSql, /case when count\([^)]*save_rate\) > 0 then percentile_cont\(0\.5\)[\s\S]+median_save_rate/i);
+    assert.match(viewSql, /case when count\([^)]*share_rate\) > 0 then percentile_cont\(0\.5\)[\s\S]+median_share_rate/i);
+    assert.match(viewSql, /case when count\([^)]*signal\) > 0 then percentile_cont\(0\.5\)[\s\S]+median_signal/i);
+    assert.match(viewSql, /median_signal[\s\S]+measured_reach_n[\s\S]+measured_save_rate_n[\s\S]+measured_share_rate_n[\s\S]+measured_signal_n/i);
+  }
+  assert.match(partnerTrackView, /count\(v\.signal\) >= 5 as sample_sufficient/i);
+  assert.match(partnerTrackView, /case when count\(v\.signal\) >= 5 then percentile_cont\(0\.5\)[\s\S]+median_signal/i);
+  assert.match(partnerTrackView, /case when count\(v\.reach\) >= 5 then percentile_cont\(0\.5\)[\s\S]+median_reach/i);
+  assert.match(partnerTrackView, /last_collab_at[\s\S]+measured_reach_n[\s\S]+measured_save_rate_n[\s\S]+measured_share_rate_n[\s\S]+measured_signal_n/i);
   assert.doesNotMatch(sql, /set views = null[\s\S]+where date </i);
   assert.match(sql, /perform public\.assert_can_use_app\(\)[\s\S]+public\.can_publish_items\(\)[\s\S]+ARCHIVED_IMMUTABLE[\s\S]+set_config\('app\.rpc'[\s\S]+insert into public\.transitions[\s\S]+refresh_slot_state/i);
   const insightsRoute = readFileSync("src/app/api/insights/route.ts", "utf8");
   assert.match(insightsRoute, /mediaType === "REELS"[\s\S]+eq\("product_type", "REELS"\)/);
   assert.match(insightsRoute, /mediaType === "VIDEO"[\s\S]+eq\("media_type", "VIDEO"\)[\s\S]+product_type\.neq\.REELS/);
+  const syncRoute = readFileSync("src/app/api/internal/analytics-sync/route.ts", "utf8");
+  assert.match(syncRoute, /p_request_sha256: analyticsIdempotencyHash\(validated\.value\)/);
+  assert.match(syncRoute, /replayed: data\.replayed === true/);
+  assert.doesNotMatch(syncRoute, /E_REPLAY|safeError\([^\n]+409/);
   const linkReviewRoute = readFileSync("src/app/api/admin/analytics-links/route.ts", "utf8");
   assert.doesNotMatch(linkReviewRoute, /!row\.ig_media_id/);
   for (const clientPath of ["src/components/insights-dashboard.tsx", "src/components/analytics-link-review.tsx"]) {

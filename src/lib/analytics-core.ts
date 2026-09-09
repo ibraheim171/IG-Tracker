@@ -63,6 +63,39 @@ export type AnalyticsSyncPayload = {
   collabs: Record<string, unknown>[];
 };
 
+function canonicalizeSemanticValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map(canonicalizeSemanticValue)
+      .sort((left, right) => {
+        const leftJson = JSON.stringify(left);
+        const rightJson = JSON.stringify(right);
+        return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
+      });
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([key, child]) => [key, canonicalizeSemanticValue(child)]),
+    );
+  }
+  return value;
+}
+
+export function analyticsIdempotencyHash(payload: AnalyticsSyncPayload) {
+  const measurements = {
+    account_daily: payload.account_daily,
+    collabs: payload.collabs,
+    demographics: payload.demographics,
+    post_daily: payload.post_daily,
+    posts: payload.posts,
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalizeSemanticValue(measurements)))
+    .digest("hex");
+}
+
 const permalinkPattern = /^https:\/\/(?:www\.)?instagram\.com\/(p|reel|tv)\/([A-Za-z0-9_-]+)\/?(?:[?#].*)?$/i;
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 const metricNames = ["likes", "comments", "reach", "views", "saved", "shares", "interactions", "profile_visits", "follows", "avg_watch_ms"] as const;
@@ -170,7 +203,7 @@ export function verifyAnalyticsSignature(input: {
   const expected = createHmac("sha256", input.secret).update(input.timestamp).update(input.rawBody).digest();
   const actual = Buffer.from(input.signature, "hex");
   if (actual.byteLength !== expected.byteLength || !timingSafeEqual(actual, expected)) return { ok: false as const, code: "E_SIGNATURE_INVALID" };
-  return { ok: true as const, requestSha256: createHash("sha256").update(input.rawBody).digest("hex") };
+  return { ok: true as const };
 }
 
 export async function readBoundedAnalyticsBody(stream: ReadableStream<Uint8Array> | null, maxBytes = analyticsSyncMaxBytes) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  analyticsIdempotencyHash,
   readBoundedAnalyticsBody,
   isTruthfulAcceptedIngestionResult,
   validateAnalyticsPayload,
@@ -84,13 +85,13 @@ export async function POST(request: NextRequest) {
       p_idempotency_key: validated.value.idempotency_key,
       p_signature_timestamp: timestamp,
       p_source_timestamp: validated.value.source_timestamp,
-      p_request_sha256: signature.requestSha256,
+      p_request_sha256: analyticsIdempotencyHash(validated.value),
     });
     if (error || !data) return safeError("E_SYNC_WRITE", 500, { received_count: receivedCount, rejected_count: receivedCount });
-    if (data.replayed) return safeError("E_REPLAY", 409, { received_count: receivedCount, rejected_count: receivedCount });
     if (!isTruthfulAcceptedIngestionResult(data, receivedCount)) return safeError("E_SYNC_WRITE", 500, { received_count: receivedCount, rejected_count: receivedCount });
     return NextResponse.json({
       ok: true,
+      replayed: data.replayed === true,
       run_id: data.run_id,
       received_count: data.received_count,
       inserted_count: data.inserted_count,

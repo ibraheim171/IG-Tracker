@@ -84,14 +84,13 @@ create table public.analytics_sync_runs (
   already_present_identical_count integer not null default 0 check (already_present_identical_count >= 0),
   rejected_count integer not null default 0 check (rejected_count >= 0),
   safe_error_summary text,
-  constraint analytics_sync_runs_signed_request_unique unique (signature_timestamp, request_sha256),
+  constraint analytics_sync_runs_idempotency_key_unique unique (idempotency_key),
   constraint analytics_sync_runs_key_check check (char_length(idempotency_key) between 8 and 128),
   constraint analytics_sync_runs_sha_check check (request_sha256 ~ '^[0-9a-f]{64}$')
 );
 
 create index analytics_sync_runs_received_idx on public.analytics_sync_runs (received_at desc);
 create index analytics_sync_runs_source_idx on public.analytics_sync_runs (source_timestamp desc);
-create index analytics_sync_runs_idempotency_idx on public.analytics_sync_runs (idempotency_key, received_at desc);
 
 create table public.ig_item_links (
   item_id uuid primary key references public.items(id) on delete cascade,
@@ -311,6 +310,69 @@ join public.v_post_latest d on d.media_id = p.media_id
 left join public.tracks t on t.id = i.track_id
 left join public.idea_types ty on ty.id = i.idea_type_id
 where not i.is_archived;
+
+create or replace view public.v_track_month
+with (security_invoker = true)
+as
+select
+  date_trunc('month', published_at)::date as month,
+  track_id, track_name, color_hex,
+  count(*) as n,
+  count(*) < 4 as is_thin,
+  case when count(reach) > 0 then percentile_cont(0.5) within group (order by reach) end as median_reach,
+  case when count(save_rate) > 0 then percentile_cont(0.5) within group (order by save_rate) end as median_save_rate,
+  case when count(share_rate) > 0 then percentile_cont(0.5) within group (order by share_rate) end as median_share_rate,
+  case when count(signal) > 0 then percentile_cont(0.5) within group (order by signal) end as median_signal,
+  count(reach) as measured_reach_n,
+  count(save_rate) as measured_save_rate_n,
+  count(share_rate) as measured_share_rate_n,
+  count(signal) as measured_signal_n
+from public.v_item_performance
+where published_at is not null
+group by 1, 2, 3, 4;
+
+create or replace view public.v_partner_month
+with (security_invoker = true)
+as
+select
+  date_trunc('month', v.published_at)::date as month,
+  pr.id as partner_id, pr.name as partner_name,
+  count(*) as n,
+  count(*) < 4 as is_thin,
+  case when count(v.reach) > 0 then percentile_cont(0.5) within group (order by v.reach) end as median_reach,
+  case when count(v.save_rate) > 0 then percentile_cont(0.5) within group (order by v.save_rate) end as median_save_rate,
+  case when count(v.share_rate) > 0 then percentile_cont(0.5) within group (order by v.share_rate) end as median_share_rate,
+  case when count(v.signal) > 0 then percentile_cont(0.5) within group (order by v.signal) end as median_signal,
+  count(v.reach) as measured_reach_n,
+  count(v.save_rate) as measured_save_rate_n,
+  count(v.share_rate) as measured_share_rate_n,
+  count(v.signal) as measured_signal_n
+from public.v_item_performance v
+join public.item_partners ip on ip.item_id = v.id
+join public.partners pr on pr.id = ip.partner_id
+where v.published_at is not null
+group by 1, 2, 3;
+
+create or replace view public.v_partner_track
+with (security_invoker = true)
+as
+select
+  pr.id as partner_id, pr.name as partner_name,
+  v.track_id, v.track_name,
+  count(*) as n,
+  count(v.signal) >= 5 as sample_sufficient,
+  case when count(v.signal) >= 5 then percentile_cont(0.5) within group (order by v.signal) end as median_signal,
+  case when count(v.reach) >= 5 then percentile_cont(0.5) within group (order by v.reach) end as median_reach,
+  max(v.published_at) as last_collab_at,
+  count(v.reach) as measured_reach_n,
+  count(v.save_rate) as measured_save_rate_n,
+  count(v.share_rate) as measured_share_rate_n,
+  count(v.signal) as measured_signal_n
+from public.v_item_performance v
+join public.item_partners ip on ip.item_id = v.id
+join public.partners pr on pr.id = ip.partner_id
+where v.published_at is not null
+group by 1, 2, 3, 4;
 
 create or replace view public.v_conflict_link_unresolved
 with (security_invoker = true)
@@ -535,6 +597,7 @@ begin
     raise exception 'REASON_REQUIRED';
   end if;
 
+  perform pg_advisory_xact_lock(hashtext('analytics-ingestion-v1'));
   perform pg_advisory_xact_lock(hashtext('ig-item-link:' || p_item_id::text));
   perform pg_advisory_xact_lock(hashtext('ig-media-link:' || p_media_id));
   select * into target_item from public.items where id = p_item_id for update;
@@ -577,6 +640,7 @@ set search_path = pg_catalog, public
 as $$
 declare
   run_id uuid;
+  existing_run public.analytics_sync_runs%rowtype;
   counts jsonb;
   received integer := 0;
   inserted integer := 0;
@@ -616,12 +680,36 @@ begin
   -- All ingestion requests share one transaction lock. This makes the preflight
   -- comparison and subsequent inserts atomic even for different request keys.
   perform pg_advisory_xact_lock(hashtext('analytics-ingestion-v1'));
+
+  select * into existing_run
+  from public.analytics_sync_runs
+  where idempotency_key = p_idempotency_key
+  for update;
+
+  if existing_run.id is not null then
+    if existing_run.request_sha256 is distinct from p_request_sha256 then
+      raise exception 'IDEMPOTENCY_KEY_REUSED';
+    end if;
+    if existing_run.status = 'accepted' then
+      return jsonb_build_object(
+        'replayed', true,
+        'run_id', existing_run.id,
+        'received_count', existing_run.received_count,
+        'inserted_count', existing_run.inserted_count,
+        'updated_count', existing_run.updated_count,
+        'already_present_identical_count', existing_run.already_present_identical_count,
+        'rejected_count', existing_run.rejected_count,
+        'row_counts', existing_run.row_counts
+      );
+    end if;
+    raise exception 'IDEMPOTENCY_RUN_NOT_ACCEPTED';
+  end if;
+
   insert into public.analytics_sync_runs (
     idempotency_key, request_sha256, signature_timestamp, source_timestamp, status
   ) values (
     p_idempotency_key, p_request_sha256, p_signature_timestamp, p_source_timestamp, 'processing'
-  ) on conflict do nothing returning id into run_id;
-  if run_id is null then return jsonb_build_object('replayed', true); end if;
+  ) returning id into run_id;
 
   create temporary table pg_temp.analytics_incoming_posts on commit drop as
   select x.post_id as media_id, x.published_at,
@@ -706,11 +794,11 @@ begin
     join public.ig_post_daily e using (media_id, snapshot_date)
     where row(e.age_days, e.likes, e.comments, e.reach, e.views, e.saved, e.shares,
               e.interactions, e.profile_visits, e.follows, e.avg_watch_ms,
-              public.normalize_analytics_metric_names(e.missing_metrics), e.source_timestamp)
+              public.normalize_analytics_metric_names(e.missing_metrics))
       is distinct from
           row(t.age_days, t.likes, t.comments, t.reach, t.views, t.saved, t.shares,
               t.interactions, t.profile_visits, t.follows, t.avg_watch_ms,
-              t.missing_metrics, t.source_timestamp)
+              t.missing_metrics)
   ) then raise exception 'DIVERGENT_POST_DAILY_SNAPSHOT'; end if;
 
   if exists (
@@ -718,17 +806,17 @@ begin
     join public.ig_account_daily e using (date)
     where row(e.followers, e.media_count, e.reach, e.views, e.reach_followers,
               e.reach_non_followers, e.follows, e.unfollows,
-              public.normalize_analytics_metric_names(e.missing_metrics), e.source_timestamp)
+              public.normalize_analytics_metric_names(e.missing_metrics))
       is distinct from
           row(t.followers, t.media_count, t.reach, t.views, t.reach_followers,
               t.reach_non_followers, t.follows, t.unfollows,
-              t.missing_metrics, t.source_timestamp)
+              t.missing_metrics)
   ) then raise exception 'DIVERGENT_ACCOUNT_DAILY_SNAPSHOT'; end if;
 
   if exists (
     select 1 from pg_temp.analytics_incoming_demographics t
     join public.ig_demographics e using (snapshot_date, dimension, key)
-    where row(e.value, e.source_timestamp) is distinct from row(t.value, t.source_timestamp)
+    where e.value is distinct from t.value
   ) then raise exception 'DIVERGENT_DEMOGRAPHIC_SNAPSHOT'; end if;
 
   if exists (
@@ -740,12 +828,12 @@ begin
     where row(e.notes, e.net_follows_before, e.net_follows_after, e.follows_lift,
               e.reach_before, e.reach_after, e.reach_lift_pct,
               e.nonfollower_before, e.nonfollower_after, e.nonfollower_lift_pct,
-              e.computed_at, e.source_timestamp)
+              e.computed_at)
       is distinct from
           row(t.notes, t.net_follows_before, t.net_follows_after, t.follows_lift,
               t.reach_before, t.reach_after, t.reach_lift_pct,
               t.nonfollower_before, t.nonfollower_after, t.nonfollower_lift_pct,
-              t.computed_at, t.source_timestamp)
+              t.computed_at)
   ) then raise exception 'DIVERGENT_COLLAB_SNAPSHOT'; end if;
 
   select count(*) into posts_received from pg_temp.analytics_incoming_posts;

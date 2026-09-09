@@ -1333,6 +1333,10 @@ export type Database = {
       v_partner_month: {
         Row: {
           is_thin: boolean | null
+          measured_reach_n: number | null
+          measured_save_rate_n: number | null
+          measured_share_rate_n: number | null
+          measured_signal_n: number | null
           median_reach: number | null
           median_save_rate: number | null
           median_share_rate: number | null
@@ -1347,6 +1351,10 @@ export type Database = {
       v_partner_track: {
         Row: {
           last_collab_at: string | null
+          measured_reach_n: number | null
+          measured_save_rate_n: number | null
+          measured_share_rate_n: number | null
+          measured_signal_n: number | null
           median_reach: number | null
           median_signal: number | null
           n: number | null
@@ -1455,6 +1463,10 @@ export type Database = {
         Row: {
           color_hex: string | null
           is_thin: boolean | null
+          measured_reach_n: number | null
+          measured_save_rate_n: number | null
+          measured_share_rate_n: number | null
+          measured_signal_n: number | null
           median_reach: number | null
           median_save_rate: number | null
           median_share_rate: number | null
