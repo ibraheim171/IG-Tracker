@@ -36,11 +36,12 @@ export async function POST(request: NextRequest) {
   try {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
+      const status = typeof error.status === "number" && error.status >= 400 && error.status <= 599 ? error.status : 401;
       return withCookies(
         cookieCarrier,
         NextResponse.json(
           { ok: false, code: error.code || "AUTH_ERROR", error: error.message },
-          { status: typeof error.status === "number" ? error.status : 401 },
+          { status },
         ),
       );
     }
