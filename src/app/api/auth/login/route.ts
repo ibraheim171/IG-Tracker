@@ -47,9 +47,8 @@ export async function POST(request: NextRequest) {
     }
 
     return withCookies(cookieCarrier, NextResponse.json({ ok: true }));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown";
-    return withCookies(cookieCarrier, NextResponse.json({ ok: false, code: "E_AUTH_REQUEST", error: message }, { status: 502 }));
+  } catch {
+    return withCookies(cookieCarrier, NextResponse.json({ ok: false, code: "E_AUTH_REQUEST" }, { status: 502 }));
   }
 }
 
