@@ -1,6 +1,6 @@
--- PostgREST builds its RPC schema cache from functions executable by browser
--- roles. Keep the actual writer private, while exposing a tiny gateway that
--- accepts calls only when the request JWT is the server-only service role.
+-- Keep the analytics writer callable only by the server's service role.
+-- The gateway is SECURITY INVOKER so Supabase secret and legacy service keys
+-- are authorized by the API role itself; no JWT claim parsing is required.
 
 begin;
 
@@ -9,6 +9,8 @@ alter function public.ingest_analytics_batch(jsonb, text, timestamptz, timestamp
 
 revoke all on function public.ingest_analytics_batch_impl(jsonb, text, timestamptz, timestamptz, text)
   from public, anon, authenticated, service_role;
+grant execute on function public.ingest_analytics_batch_impl(jsonb, text, timestamptz, timestamptz, text)
+  to service_role;
 
 create function public.ingest_analytics_batch(
   p_payload jsonb,
@@ -18,14 +20,10 @@ create function public.ingest_analytics_batch(
   p_request_sha256 text
 ) returns jsonb
 language plpgsql
-security definer
+security invoker
 set search_path = pg_catalog, public
 as $$
 begin
-  if current_setting('request.jwt.claim.role', true) is distinct from 'service_role' then
-    raise exception 'ANALYTICS_INGESTION_FORBIDDEN';
-  end if;
-
   return public.ingest_analytics_batch_impl(
     p_payload,
     p_idempotency_key,
@@ -37,9 +35,9 @@ end;
 $$;
 
 revoke all on function public.ingest_analytics_batch(jsonb, text, timestamptz, timestamptz, text)
-  from public;
+  from public, anon, authenticated, service_role;
 grant execute on function public.ingest_analytics_batch(jsonb, text, timestamptz, timestamptz, text)
-  to anon, authenticated, service_role;
+  to service_role;
 
 alter function public.ingest_analytics_batch(jsonb, text, timestamptz, timestamptz, text)
   owner to postgres;
