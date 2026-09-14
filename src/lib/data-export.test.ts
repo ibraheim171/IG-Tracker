@@ -63,3 +63,19 @@ test("AI export is deterministic and carries a safe scope marker", () => {
   assert.equal(result.generated_at, "2026-09-14T00:00:00.000Z");
   assert.deepEqual(result.items.map((row) => row.id), ["a", "b"]);
 });
+
+test("AI export omits records explicitly marked as internal UAT", () => {
+  const result = buildAiExport({
+    items: [
+      { id: "real", ref: "AQ-0011", title: "مادة حقيقية", created_at: "2026-06-03T00:00:00Z" },
+      { id: "uat", ref: "AQ-0007", title: "UAT — مسودة عنوان فقط", notes: "سجل اختبار داخلي", created_at: "2026-06-03T00:00:00Z" },
+    ],
+    publishingSlots: [], itemParticipants: [{ item_id: "uat", user_id: "tester", part: "writer" }], itemPartners: [], transitions: [],
+    profiles: [{ id: "tester", display_name: "Tester", roles: ["writer"] }], partners: [], tracks: [],
+    igPosts: [], igPostDaily: [], igAccountDaily: [], igDemographics: [], igCollabs: [],
+  }, "2026-09-14T00:00:00.000Z");
+
+  assert.deepEqual(result.items.map((row) => row.id), ["real"]);
+  assert.deepEqual(result.item_participants, []);
+  assert.deepEqual(result.profiles, []);
+});

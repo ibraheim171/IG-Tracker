@@ -77,6 +77,10 @@ function rowDate(row: ExportRow, keys: readonly string[]): string | null {
   return null;
 }
 
+function isExplicitUatRecord(row: ExportRow): boolean {
+  return ["title", "caption", "notes"].some((key) => /\bUAT\b/i.test(stringValue(row, key) ?? ""));
+}
+
 function sortRows(rows: readonly ExportRow[], keys: readonly string[]): ExportRow[] {
   return [...rows].sort((left, right) => {
     for (const key of keys) {
@@ -113,6 +117,7 @@ export function buildAiExport(input: DataExportInput, generatedAt = new Date().t
   const slots = filterByDate(input.publishingSlots, ["slot_at"]);
   const slotById = new Map(input.publishingSlots.map((slot) => [stringValue(slot, "id"), slot]));
   const items = input.items.filter((item) => {
+    if (isExplicitUatRecord(item)) return false;
     const slotId = stringValue(item, "slot_id");
     const slot = slotId ? slotById.get(slotId) : undefined;
     const relevantDate = slot ? stringValue(slot, "slot_at") : rowDate(item, ["published_at", "scheduled_at", "created_at"]);
@@ -165,7 +170,7 @@ export function buildAiExport(input: DataExportInput, generatedAt = new Date().t
       source: "ig-tracker-site",
       excluded_months: EXCLUDED_MONTHS,
       excluded_month_names: ["April", "May"],
-      note: "Operational export only. April and May are intentionally excluded and no source data is deleted.",
+      note: "Operational export only. April and May plus explicitly labeled UAT records are excluded; no source data is deleted.",
     },
     items: sortRows(items, ["ref", "id"]),
     publishing_slots: sortRows(slots, ["slot_at", "id"]),
