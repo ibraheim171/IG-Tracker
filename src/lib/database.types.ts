@@ -1208,6 +1208,53 @@ export type Database = {
           },
         ]
       }
+      work_tracker_source_rows: {
+        Row: {
+          id: string
+          source_file_hash: string
+          source_sheet: string
+          source_row: number
+          item_id: string | null
+          publish_date: string | null
+          title: string | null
+          duplicate_key: string | null
+          payload: Json
+          imported_at: string
+        }
+        Insert: {
+          id?: string
+          source_file_hash: string
+          source_sheet: string
+          source_row: number
+          item_id?: string | null
+          publish_date?: string | null
+          title?: string | null
+          duplicate_key?: string | null
+          payload: Json
+          imported_at?: string
+        }
+        Update: {
+          id?: string
+          source_file_hash?: string
+          source_sheet?: string
+          source_row?: number
+          item_id?: string | null
+          publish_date?: string | null
+          title?: string | null
+          duplicate_key?: string | null
+          payload?: Json
+          imported_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "work_tracker_source_rows_item_id_fkey"
+            columns: ["item_id"]
+            isOneToOne: false
+            referencedRelation: "items"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       v_conflict_link_unresolved: {
@@ -1961,4 +2008,3 @@ export const Constants = {
     },
   },
 } as const
-

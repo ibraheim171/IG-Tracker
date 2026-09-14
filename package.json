@@ -21,7 +21,8 @@
     "test:insights": "node --test src/lib/insights.test.ts",
     "test:weekly-reports": "node --test src/lib/weekly-reports.test.ts",
     "test:analytics-core": "node --test src/lib/analytics-core.test.ts",
-    "test": "pnpm run test:admin-users && pnpm run test:item-permissions && pnpm run test:restrict-writer-item-fields && pnpm run test:admin-reassign-tasks && pnpm run test:admin-create-item && pnpm run test:workflow-ui && pnpm run test:operational-ui && pnpm run test:dialog-focus && pnpm run test:admin-team-members && pnpm run test:ready-publish-dialog && pnpm run test:item-assignment-editor && pnpm run test:item-assignment-concurrency && pnpm run test:insights && pnpm run test:weekly-reports && pnpm run test:analytics-core"
+    "test:data-export": "node --test src/lib/data-export.test.ts",
+    "test": "pnpm run test:admin-users && pnpm run test:item-permissions && pnpm run test:restrict-writer-item-fields && pnpm run test:admin-reassign-tasks && pnpm run test:admin-create-item && pnpm run test:workflow-ui && pnpm run test:operational-ui && pnpm run test:dialog-focus && pnpm run test:admin-team-members && pnpm run test:ready-publish-dialog && pnpm run test:item-assignment-editor && pnpm run test:item-assignment-concurrency && pnpm run test:insights && pnpm run test:weekly-reports && pnpm run test:analytics-core && pnpm run test:data-export"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

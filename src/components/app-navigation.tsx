@@ -10,6 +10,7 @@ const navigationItems = [
   { href: "/waiting", label: "بانتظار", icon: "clock" },
   { href: "/my", label: "موادي", icon: "file" },
   { href: "/insights", label: "الإحصائيات", icon: "stats" },
+  { href: "/admin/data-export", label: "تصدير البيانات", icon: "download" },
 ] as const;
 
 function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon"] }) {
@@ -39,6 +40,13 @@ function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M5 20V10M12 20V4M19 20v-7" />
+      </svg>
+    );
+  }
+  if (name === "download") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" />
       </svg>
     );
   }
@@ -77,7 +85,7 @@ export function AppNavigation({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <nav className={`nav-links${isAdmin ? " nav-links-admin" : ""}`} aria-label="التنقل الرئيسي">
-      {navigationItems.filter((item) => item.href !== "/insights" || isAdmin).map((item) => {
+      {navigationItems.filter((item) => (item.href !== "/insights" && item.href !== "/admin/data-export") || isAdmin).map((item) => {
         const isCurrent = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
         const isVisuallyActive = item.href === "/" ? visualPathname === "/" : visualPathname.startsWith(item.href);
         const isPending = pendingHref === item.href && !isCurrent;
