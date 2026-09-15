@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { matchesAnalyticsMediaFilter } from "./analytics-core.ts";
-import { buildInsightsSnapshot, buildPerformanceAggregates, currentWeekRange, insightRangePreset, insightUtcBounds, recentInsightsRange, summarizeAccountRange, validateInsightRange } from "./insights.ts";
+import { buildInsightsSnapshot, buildPerformanceAggregates, currentWeekRange, insightRangePreset, insightUtcBounds, normalizeAccountDaily, recentInsightsRange, summarizeAccountRange, validateInsightRange } from "./insights.ts";
 
 test("current week uses Monday through Sunday in the application time zone", () => {
   assert.deepEqual(currentWeekRange(new Date("2026-09-09T10:00:00Z")), { start: "2026-09-07", end: "2026-09-13" });
@@ -27,6 +27,14 @@ test("account range totals remain unknown until every day is measured", () => {
   assert.equal(summary.views.measured_days, 2);
   assert.equal(summary.follows.total, null);
   assert.equal(summary.followers.change, 4);
+});
+
+test("legacy placeholder account views remain unknown instead of becoming real zeros", () => {
+  const legacy = normalizeAccountDaily({ date: "2026-05-17", followers: null, media_count: null, reach: 1251, views: 0, reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: ["followers"] });
+  assert.equal(legacy.views, null);
+  assert.deepEqual(legacy.missing_metrics, ["followers", "views"]);
+  const realZero = normalizeAccountDaily({ date: "2026-09-15", followers: 2876, media_count: 169, reach: 0, views: 0, reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: [] });
+  assert.equal(realZero.views, 0);
 });
 
 test("date range accepts real dates and rejects reversed, malformed, and overlong ranges", () => {

@@ -88,6 +88,17 @@ export type SyncRunInsight = {
   rejected_count: number;
 };
 
+/**
+ * The first legacy backfill wrote a zero when Meta did not return account views.
+ * A row without either account snapshot field cannot establish that zero as a real
+ * measurement, so present it as unavailable until the one-time DB cleanup runs.
+ */
+export function normalizeAccountDaily(row: AccountDailyInsight): AccountDailyInsight {
+  const missing = [...new Set(row.missing_metrics ?? [])];
+  const placeholderViews = row.views === 0 && row.followers === null && row.media_count === null && row.reach !== null;
+  return placeholderViews ? { ...row, views: null, missing_metrics: [...missing, "views"] } : { ...row, missing_metrics: missing };
+}
+
 type AggregateRow = Pick<PerformanceDetail, "id" | "published_at" | "track_id" | "track_name" | "idea_type_id" | "idea_type" | "reach" | "save_rate" | "share_rate" | "signal">;
 
 export function buildPerformanceAggregates(rows: AggregateRow[], partnerLinks: Array<{ item_id: string; partner_id: number; partner_name: string }>) {
