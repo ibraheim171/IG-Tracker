@@ -6,7 +6,7 @@ import {
   resolveLoadedItemAssignmentRevision,
 } from "./item-assignment-revision.ts";
 
-const migration = readFileSync("supabase/migrations/20260908031720_assignment_optimistic_concurrency.sql", "utf8");
+const migration = readFileSync("supabase/migrations/20260908094853_assignment_optimistic_concurrency.sql", "utf8");
 const saveRoute = readFileSync("src/app/api/admin/items/[itemId]/participants/route.ts", "utf8");
 const createRoute = readFileSync("src/app/api/admin/items/route.ts", "utf8");
 const createModal = readFileSync("src/components/admin-create-item-modal.tsx", "utf8");

@@ -9,6 +9,8 @@ const navigationItems = [
   { href: "/ready", label: "جاهز للنشر", icon: "send" },
   { href: "/waiting", label: "بانتظار", icon: "clock" },
   { href: "/my", label: "موادي", icon: "file" },
+  { href: "/insights", label: "الإحصائيات", icon: "stats" },
+  { href: "/admin/data-export", label: "تصدير البيانات", icon: "download" },
 ] as const;
 
 function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon"] }) {
@@ -34,6 +36,20 @@ function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon
       </svg>
     );
   }
+  if (name === "stats") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 20V10M12 20V4M19 20v-7" />
+      </svg>
+    );
+  }
+  if (name === "download") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M7 3h7l4 4v14H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />
@@ -42,7 +58,7 @@ function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon
   );
 }
 
-export function AppNavigation() {
+export function AppNavigation({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
@@ -68,8 +84,8 @@ export function AppNavigation() {
   const visualPathname = pendingHref ?? pathname;
 
   return (
-    <nav className="nav-links" aria-label="التنقل الرئيسي">
-      {navigationItems.map((item) => {
+    <nav className={`nav-links${isAdmin ? " nav-links-admin" : ""}`} aria-label="التنقل الرئيسي">
+      {navigationItems.filter((item) => (item.href !== "/insights" && item.href !== "/admin/data-export") || isAdmin).map((item) => {
         const isCurrent = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
         const isVisuallyActive = item.href === "/" ? visualPathname === "/" : visualPathname.startsWith(item.href);
         const isPending = pendingHref === item.href && !isCurrent;

@@ -1,8 +1,7 @@
 "use client";
 
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 
 type LoginErrorLike = {
   code?: unknown;
@@ -54,7 +53,6 @@ function loginErrorMessage(error: unknown) {
 
 export function LoginForm() {
   const router = useRouter();
-  const supabase = useMemo(() => createClient(), []);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -66,19 +64,30 @@ export function LoginForm() {
 
     try {
       const form = new FormData(event.currentTarget);
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: String(form.get("email") ?? "").trim(),
-        password: String(form.get("password") ?? ""),
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          email: String(form.get("email") ?? "").trim(),
+          password: String(form.get("password") ?? ""),
+        }),
       });
 
-      if (signInError) {
-        setError(loginErrorMessage(signInError));
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        setError(loginErrorMessage({
+          code: result.code,
+          message: result.error || result.message,
+          name: result.name,
+          status: response.status,
+        }));
         return;
       }
 
       router.replace("/");
-    } catch (signInError) {
-      setError(loginErrorMessage(signInError));
+    } catch (requestError) {
+      setError(loginErrorMessage(requestError));
     } finally {
       setLoading(false);
     }
