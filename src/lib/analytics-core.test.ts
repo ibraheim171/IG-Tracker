@@ -40,6 +40,13 @@ test("canonical linking accepts only exact HTTPS Instagram post paths", () => {
   for (const invalid of ["http://instagram.com/p/ABC", "https://example.com/p/ABC", "https://instagram.com/stories/ABC", "https://instagram.com/p/ABC/extra", "not a url"]) assert.equal(canonicalInstagramPermalink(invalid), null);
 });
 
+test("analytics accepts measurements from April and May like any other calendar dates", () => {
+  const payload = structuredClone(basePayload);
+  payload.account_daily[0].date = "2027-04-01";
+  payload.post_daily[0].snapshot_date = "2027-05-31";
+  assert.equal(validateAnalyticsPayload(payload).ok, true);
+});
+
 test("automatic matching uses only canonical permalink and never caption, title, or date", () => {
   const posts = [
     basePayload.posts[0],
@@ -299,4 +306,11 @@ test("migration contract makes ingestion atomic/idempotent and database linking 
   for (const clientPath of ["src/components/insights-dashboard.tsx", "src/components/analytics-link-review.tsx"]) {
     assert.doesNotMatch(readFileSync(clientPath, "utf8"), /SUPABASE_SERVICE_ROLE_KEY|createClient\s*\(/);
   }
+});
+
+test("range snapshots never reject valid future April or May analytics", () => {
+  const sql = readFileSync("supabase/migrations/20260915001000_allow_all_calendar_dates_for_analytics.sql", "utf8");
+  assert.match(sql, /drop constraint if exists ig_account_range_snapshots_check1/i);
+  assert.match(sql, /drop function if exists public\.analytics_range_crosses_excluded_months\(date, date\)/i);
+  assert.doesNotMatch(sql, /analytics_range_crosses_excluded_months\(range_start, range_end\)/i);
 });

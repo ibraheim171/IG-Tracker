@@ -1,10 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { matchesAnalyticsMediaFilter } from "./analytics-core.ts";
-import { buildInsightsSnapshot, buildPerformanceAggregates, currentWeekRange, insightUtcBounds, validateInsightRange } from "./insights.ts";
+import { buildInsightsSnapshot, buildPerformanceAggregates, currentWeekRange, insightRangePreset, insightUtcBounds, recentInsightsRange, summarizeAccountRange, validateInsightRange } from "./insights.ts";
 
 test("current week uses Monday through Sunday in the application time zone", () => {
   assert.deepEqual(currentWeekRange(new Date("2026-09-09T10:00:00Z")), { start: "2026-09-07", end: "2026-09-13" });
+});
+
+test("recent insights open with the prior thirty days so the latest completed sync stays visible", () => {
+  assert.deepEqual(recentInsightsRange(new Date("2026-09-14T12:00:00Z")), { start: "2026-08-16", end: "2026-09-14" });
+});
+
+test("range presets keep a custom range possible while making common windows one tap", () => {
+  assert.deepEqual(insightRangePreset("week", new Date("2026-09-14T12:00:00Z")), { start: "2026-09-08", end: "2026-09-14" });
+  assert.deepEqual(insightRangePreset("three_months", new Date("2026-09-14T12:00:00Z")), { start: "2026-06-17", end: "2026-09-14" });
+});
+
+test("account range totals remain unknown until every day is measured", () => {
+  const summary = summarizeAccountRange({ start: "2026-09-01", end: "2026-09-03" }, [
+    { date: "2026-09-01", followers: 100, media_count: null, reach: 10, views: 20, reach_followers: null, reach_non_followers: null, follows: 2, unfollows: null, missing_metrics: [] },
+    { date: "2026-09-02", followers: 102, media_count: null, reach: 20, views: null, reach_followers: null, reach_non_followers: null, follows: 3, unfollows: null, missing_metrics: ["views"] },
+    { date: "2026-09-03", followers: 104, media_count: null, reach: 10, views: 30, reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: ["follows"] },
+  ]);
+  assert.equal(summary.reach.total, 40);
+  assert.equal(summary.views.total, null);
+  assert.equal(summary.views.measured_days, 2);
+  assert.equal(summary.follows.total, null);
+  assert.equal(summary.followers.change, 4);
 });
 
 test("date range accepts real dates and rejects reversed, malformed, and overlong ranges", () => {

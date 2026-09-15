@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseAnalyticsMediaFilter } from "@/lib/analytics-core";
 import { requireAnalyticsAdmin } from "@/lib/analytics-auth";
 import { analyticsServiceClient } from "@/lib/analytics-server";
-import { buildInsightsSnapshot, insightUtcBounds, validateInsightRange, type PartnerActivity, type PerformanceAggregate, type PerformanceDetail, type PostCheckpoint } from "@/lib/insights";
+import { buildInsightsSnapshot, insightUtcBounds, summarizeAccountRange, validateInsightRange, type AccountDailyInsight, type PartnerActivity, type PerformanceAggregate, type PerformanceDetail, type PostCheckpoint } from "@/lib/insights";
 
 function withCookies(body: object, status: number, source: NextResponse) {
   const response = NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -85,6 +85,7 @@ export async function GET(request: NextRequest) {
   snapshot.aggregates = aggregates.filter((row) => row.dimension !== "partner_track");
   snapshot.partner_track_matrix = aggregates.filter((row) => row.dimension === "partner_track");
   snapshot.account_daily = account.data ?? [];
+  snapshot.account_summary = summarizeAccountRange(validation.range, (account.data ?? []) as AccountDailyInsight[]);
   snapshot.demographics = demographics.data ?? [];
   snapshot.collabs = (collabs.data ?? []).flatMap((row) => {
     const partner = Array.isArray(row.partners) ? row.partners[0] : row.partners;

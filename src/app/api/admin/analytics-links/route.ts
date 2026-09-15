@@ -48,6 +48,8 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return jsonWithCookies({ error: auth.error.message, code: auth.error.code }, auth.error.status, session);
   const validated = validateManualLink(await request.json().catch(() => null) ?? {});
   if (!validated.ok) return jsonWithCookies({ error: validated.code === "E_REASON" ? "سبب الربط مطلوب، بأربعة أحرف على الأقل." : "بيانات الربط غير صحيحة.", code: validated.code }, 400, session);
+  let service;
+  try { service = analyticsServiceClient(); } catch { return jsonWithCookies({ error: "خدمة التحليلات غير مهيأة في هذه البيئة.", code: "E_SERVER_CONFIG" }, 503, session); }
   const { data, error } = await auth.supabase.rpc("admin_link_instagram_post", {
     p_item_id: validated.value.itemId,
     p_media_id: validated.value.mediaId,

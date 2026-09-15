@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAiExport } from "./data-export.ts";
 
-test("AI export excludes April and May and keeps linked operational records", () => {
+test("AI export excludes only archived legacy work-tracker records, never calendar months", () => {
   const result = buildAiExport({
     items: [
       { id: "june-item", ref: "AQ-0002", title: "June", slot_id: "june-slot", created_at: "2026-06-01T10:00:00Z" },
-      { id: "may-item", ref: "AQ-0001", title: "May", slot_id: "may-slot", created_at: "2026-05-01T10:00:00Z" },
-      { id: "may-slot-item-created-later", ref: "AQ-0004", title: "May slot", slot_id: "may-slot", created_at: "2026-06-01T10:00:00Z" },
+      { id: "may-item", ref: "AQ-0001", title: "May", slot_id: "may-slot", created_at: "2026-05-01T10:00:00Z", is_archived: true },
+      { id: "may-slot-item-created-later", ref: "AQ-0004", title: "May slot", slot_id: "may-slot", created_at: "2026-06-01T10:00:00Z", is_archived: true },
       { id: "unscheduled", ref: "AQ-0003", title: "Unscheduled", slot_id: null, created_at: "2026-06-03T10:00:00Z" },
     ],
     publishingSlots: [
@@ -43,10 +43,10 @@ test("AI export excludes April and May and keeps linked operational records", ()
   assert.deepEqual(result.items.map((row) => row.id), ["june-item", "unscheduled"]);
   assert.deepEqual(result.publishing_slots.map((row) => row.id), ["june-slot"]);
   assert.deepEqual(result.item_participants.map((row) => row.item_id), ["june-item"]);
-  assert.deepEqual(result.ig_posts.map((row) => row.media_id), ["june-media"]);
-  assert.deepEqual(result.ig_post_daily.map((row) => row.media_id), ["june-media"]);
-  assert.deepEqual(result.ig_account_daily.map((row) => row.date), ["2026-06-12"]);
-  assert.deepEqual(result.ig_collabs.map((row) => row.id), ["june-collab"]);
+  assert.deepEqual(result.ig_posts.map((row) => row.media_id), ["april-media", "june-media"]);
+  assert.deepEqual(result.ig_post_daily.map((row) => row.media_id), ["april-media", "june-media"]);
+  assert.deepEqual(result.ig_account_daily.map((row) => row.date), ["2026-05-12", "2026-06-12"]);
+  assert.deepEqual(result.ig_collabs.map((row) => row.id), ["may-collab", "june-collab"]);
   assert.deepEqual(result.work_tracker_source_rows.map((row) => row.id), ["source-june"]);
   assert.deepEqual(result.profiles, [{ id: "writer-1", display_name: "Writer", roles: ["writer"] }]);
 });
@@ -59,7 +59,7 @@ test("AI export is deterministic and carries a safe scope marker", () => {
   }, "2026-09-14T00:00:00.000Z");
 
   assert.equal(result.export_version, "ig-tracker-ai-v1");
-  assert.deepEqual(result.scope.excluded_months, [4, 5]);
+  assert.deepEqual(result.scope.excluded_legacy_source_tabs, ["جدول إنجاز شهر 4", "جدول الإنجاز شهر 5"]);
   assert.equal(result.generated_at, "2026-09-14T00:00:00.000Z");
   assert.deepEqual(result.items.map((row) => row.id), ["a", "b"]);
 });

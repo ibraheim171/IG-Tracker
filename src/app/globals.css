@@ -375,7 +375,9 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 
 .team-view-stack { display: grid; gap: 0.75rem; }
 .range-filter, .report-upload-form { display: grid; gap: 0.75rem; align-items: end; }
+.range-presets { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .insight-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.insight-card small { display: block; margin-block-start: 0.35rem; }
 .insight-card { display: grid; gap: 0.4rem; min-inline-size: 0; }
 .insight-card span { color: color-mix(in srgb, var(--ink) 65%, var(--card)); }
 .insight-card strong { color: var(--accent); font-family: var(--font-heading), sans-serif; font-size: clamp(1.5rem, 7vw, 2.5rem); }

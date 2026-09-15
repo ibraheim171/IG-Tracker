@@ -37,6 +37,7 @@ export type InsightsSnapshot = {
   aggregates?: PerformanceAggregate[];
   partner_track_matrix?: PerformanceAggregate[];
   account_daily?: AccountDailyInsight[];
+  account_summary?: AccountRangeSummary;
   demographics?: DemographicInsight[];
   collabs?: CollabInsight[];
   sync_runs?: SyncRunInsight[];
@@ -69,6 +70,9 @@ export type PerformanceAggregate = {
   sample_sufficient: boolean;
 };
 export type AccountDailyInsight = { date: string; followers: number | null; media_count: number | null; reach: number | null; views: number | null; reach_followers: number | null; reach_non_followers: number | null; follows: number | null; unfollows: number | null; missing_metrics: string[] };
+export type AccountRangeMetric = { total: number | null; measured_days: number; expected_days: number };
+export type AccountRangeFollowerSummary = { start: number | null; end: number | null; change: number | null; measured_days: number; expected_days: number };
+export type AccountRangeSummary = { followers: AccountRangeFollowerSummary; reach: AccountRangeMetric; views: AccountRangeMetric; follows: AccountRangeMetric; unfollows: AccountRangeMetric };
 export type DemographicInsight = { snapshot_date: string; dimension: string; key: string; value: number | null };
 export type CollabInsight = { collaboration_date: string; partner: string; collaboration_type: string | null; follows_lift: number | null; reach_lift_pct: number | null; nonfollower_lift_pct: number | null };
 export type SyncRunInsight = {
@@ -149,6 +153,34 @@ export function currentWeekRange(now = new Date()): InsightRange {
   const start = local.toISOString().slice(0, 10);
   local.setUTCDate(local.getUTCDate() + 6);
   return { start, end: local.toISOString().slice(0, 10) };
+}
+
+export function recentInsightsRange(now = new Date()): InsightRange {
+  const local = new Date(`${dateInTimeZone(now, "Asia/Hebron")}T00:00:00Z`);
+  const end = local.toISOString().slice(0, 10);
+  local.setUTCDate(local.getUTCDate() - 29);
+  return { start: local.toISOString().slice(0, 10), end };
+}
+
+export function insightRangePreset(preset: "week" | "month" | "two_months" | "three_months", now = new Date()): InsightRange {
+  const length = preset === "week" ? 7 : preset === "month" ? 30 : preset === "two_months" ? 60 : 90;
+  const local = new Date(`${dateInTimeZone(now, "Asia/Hebron")}T00:00:00Z`);
+  const end = local.toISOString().slice(0, 10);
+  local.setUTCDate(local.getUTCDate() - (length - 1));
+  return { start: local.toISOString().slice(0, 10), end };
+}
+
+export function summarizeAccountRange(range: InsightRange, rows: AccountDailyInsight[]): AccountRangeSummary {
+  const expectedDays = Math.floor((Date.parse(`${range.end}T00:00:00Z`) - Date.parse(`${range.start}T00:00:00Z`)) / 86400000) + 1;
+  const ordered = [...rows].filter((row) => row.date >= range.start && row.date <= range.end).sort((left, right) => left.date.localeCompare(right.date));
+  const metric = (field: "reach" | "views" | "follows" | "unfollows"): AccountRangeMetric => {
+    const values = ordered.map((row) => row[field]).filter((value): value is number => value !== null);
+    return { total: values.length === expectedDays ? values.reduce((sum, value) => sum + value, 0) : null, measured_days: values.length, expected_days: expectedDays };
+  };
+  const followers = ordered.filter((row) => row.followers !== null);
+  const first = followers[0]?.followers ?? null;
+  const last = followers.at(-1)?.followers ?? null;
+  return { followers: { start: first, end: last, change: first !== null && last !== null ? last - first : null, measured_days: followers.length, expected_days: expectedDays }, reach: metric("reach"), views: metric("views"), follows: metric("follows"), unfollows: metric("unfollows") };
 }
 
 function dateInTimeZone(date: Date, timeZone: string) {

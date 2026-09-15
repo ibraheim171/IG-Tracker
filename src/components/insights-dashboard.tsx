@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { InsightRange, InsightsSnapshot, PostCheckpoint } from "@/lib/insights";
+import { insightRangePreset, type AccountRangeMetric, type InsightRange, type InsightsSnapshot, type PostCheckpoint } from "@/lib/insights";
 import { workflowLabel } from "@/lib/workflow-ui";
 import { AnalyticsLinkReview } from "@/components/analytics-link-review";
 
@@ -17,6 +17,10 @@ function metric(value: number | null) {
 
 function metricWithMeasuredN(value: number | null, measuredN: number) {
   return `${metric(value)} (N=${number(measuredN)})`;
+}
+
+function RangeMetricCard({ label, summary }: { label: string; summary: AccountRangeMetric }) {
+  return <article className="card insight-card"><span>{label}</span><strong className="num">{metric(summary.total)}</strong><small className="muted">{number(summary.measured_days)} من {number(summary.expected_days)} يومًا مقاسًا</small></article>;
 }
 
 function dateTime(value: string) {
@@ -54,6 +58,12 @@ export function InsightsDashboard({ initialRange }: { initialRange: InsightRange
     setRange(draft);
   }
 
+  function applyPreset(preset: "week" | "month" | "two_months" | "three_months") {
+    const next = insightRangePreset(preset);
+    setDraft(next);
+    setRange(next);
+  }
+
   return (
     <main className="page wide-page stack">
       <header className="screen-head">
@@ -66,6 +76,12 @@ export function InsightsDashboard({ initialRange }: { initialRange: InsightRange
         <label className="field">نوع الوسائط<select className="input" value={mediaType} onChange={(event) => setMediaType(event.target.value)}><option value="">كل الأنواع</option><option value="IMAGE">صورة</option><option value="CAROUSEL_ALBUM">ألبوم</option><option value="VIDEO">فيديو</option><option value="REELS">ريلز</option></select></label>
         <button className="button" type="submit" disabled={state.kind === "loading"}>تطبيق النطاق</button>
       </form>
+      <div className="range-presets" aria-label="نطاقات سريعة">
+        <button className="button button-secondary" type="button" onClick={() => applyPreset("week")}>أسبوع</button>
+        <button className="button button-secondary" type="button" onClick={() => applyPreset("month")}>شهر</button>
+        <button className="button button-secondary" type="button" onClick={() => applyPreset("two_months")}>شهران</button>
+        <button className="button button-secondary" type="button" onClick={() => applyPreset("three_months")}>3 شهور</button>
+      </div>
 
       {state.kind === "loading" ? <section className="card" aria-live="polite"><p>جارٍ تحميل الإحصائيات…</p></section> : null}
       {state.kind === "error" ? <section className="card stack" role="alert"><p className="error">{state.message}</p><button className="button button-secondary" type="button" onClick={() => setRetry((value) => value + 1)}>إعادة المحاولة</button></section> : null}
@@ -122,7 +138,12 @@ function InsightsContent({ snapshot }: { snapshot: InsightsSnapshot }) {
     </section>
 
     <section className="card stack">
-      <h2>نمو الحساب والديموغرافيا</h2>
+      <div><h2>تغطية قياس الحساب</h2><p className="muted">لا يُعرض إجمالي المقياس إلا عندما تغطي القراءات كل أيام النطاق. المتابعون قراءة بداية/نهاية، وليست مجموعًا يوميًا.</p></div>
+      {snapshot.account_summary ? <div className="insight-card-grid"><RangeMetricCard label="الوصول" summary={snapshot.account_summary.reach} /><RangeMetricCard label="المشاهدات" summary={snapshot.account_summary.views} /><RangeMetricCard label="المتابعات" summary={snapshot.account_summary.follows} /><article className="card insight-card"><span>تغير المتابعين</span><strong className="num">{metric(snapshot.account_summary.followers.change)}</strong><small className="muted">{number(snapshot.account_summary.followers.measured_days)} من {number(snapshot.account_summary.followers.expected_days)} يومًا مقاسًا</small></article></div> : null}
+    </section>
+
+    <section className="card stack">
+      <h2>القياسات اليومية للحساب والديموغرافيا</h2>
       {!snapshot.account_daily?.length ? <p className="muted">لا توجد قياسات حساب ضمن النطاق.</p> : <div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>المتابعون</th><th>الوصول</th><th>المشاهدات</th><th>متابعات</th><th>إلغاء متابعة</th><th>اكتمال القياس</th></tr></thead><tbody>{snapshot.account_daily.map((row) => <tr key={row.date}><td className="num">{row.date}</td><td className="num">{metric(row.followers)}</td><td className="num">{metric(row.reach)}</td><td className="num">{metric(row.views)}</td><td className="num">{metric(row.follows)}</td><td className="num">{metric(row.unfollows)}</td><td>{row.missing_metrics.length ? <span className="muted">قياس ناقص</span> : "مكتمل"}</td></tr>)}</tbody></table></div>}
       {!snapshot.demographics?.length ? <p className="muted">لا توجد لقطة ديموغرافية ضمن النطاق.</p> : <div className="table-wrap"><table><thead><tr><th>تاريخ اللقطة</th><th>البعد</th><th>الفئة</th><th>القيمة</th></tr></thead><tbody>{snapshot.demographics.map((row) => <tr key={`${row.snapshot_date}-${row.dimension}-${row.key}`}><td className="num">{row.snapshot_date}</td><td>{row.dimension}</td><td>{row.key}</td><td className="num">{row.value === null ? <span className="muted">قياس ناقص</span> : metric(row.value)}</td></tr>)}</tbody></table></div>}
     </section>
