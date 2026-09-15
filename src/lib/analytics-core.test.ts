@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   analyticsIdempotencyHash,
   analyticsSyncMaxBytes,
+  buildLinkReviewQueue,
   canAccessRawAnalytics,
   canonicalInstagramPermalink,
   computePerformance,
@@ -64,6 +65,31 @@ test("ambiguous canonical matches create no guessed association", () => {
     { id: "a", ig_permalink: basePayload.posts[0].permalink },
     { id: "b", ig_permalink: "https://www.instagram.com/reel/Ab_C-1/" },
   ]), []);
+});
+
+test("link review makes only unpublished item associations actionable while keeping orphan post count as context", () => {
+  const queue = buildLinkReviewQueue(
+    [
+      { media_id: "linked-post", published_at: "2026-09-01T21:00:00Z", media_type: "IMAGE", product_type: "FEED", permalink: "https://instagram.com/p/LINKED/", caption: "موجود" },
+      { media_id: "orphan-post", published_at: "2026-09-02T21:00:00Z", media_type: "IMAGE", product_type: "FEED", permalink: "https://instagram.com/p/ORPHAN/", caption: "منشور قديم خارج ملف المواد" },
+    ],
+    [
+      { id: "linked-item", ref: "AQ-1", title: "مادة مربوطة", ig_media_id: "linked-post", published_at: "2026-09-01T21:00:00Z" },
+      { id: "needs-link", ref: "AQ-2", title: "مادة تحتاج ربط", ig_media_id: null, published_at: "2026-09-02T21:00:00Z" },
+    ],
+    [{ item_id: "linked-item", media_id: "linked-post" }],
+  );
+  assert.deepEqual(queue.items.map((item) => item.id), ["needs-link"]);
+  assert.equal(queue.orphan_post_count, 1);
+});
+
+test("link review surfaces an exact caption and date match as a documented suggestion", () => {
+  const queue = buildLinkReviewQueue(
+    [{ media_id: "post-1", published_at: "2026-09-08T21:00:00Z", caption: "حراسة الأقصى ليست وظيفة محصورة على من يستطيع الوصول إليه بجسده #نداء_الأقصى" }],
+    [{ id: "item-1", ref: "AQ-45", title: "احرس الأقصى", ig_media_id: null, published_at: "2026-09-08T21:00:00Z", caption: "حراسة الأقصى ليست وظيفة محصورة على من يستطيع الوصول إليه بجسده" }],
+    [],
+  );
+  assert.deepEqual(queue.items[0].candidates, [{ media_id: "post-1", match: "exact_caption", days_apart: 0 }]);
 });
 
 test("manual linking requires exact identifiers and a durable audit reason", () => {

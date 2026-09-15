@@ -53,6 +53,72 @@ export type AnalyticsPost = {
   caption: string | null;
 };
 
+type LinkReviewPost = {
+  media_id: string;
+  caption?: string | null;
+  published_at?: string | null;
+};
+
+type LinkReviewItem = {
+  id: string;
+  caption?: string | null;
+  published_at?: string | null;
+};
+
+type LinkReviewLink = {
+  item_id: string;
+  media_id: string;
+};
+
+/**
+ * A missing Instagram association is actionable only when a published item is
+ * missing its link. Imported account posts without such an item are retained
+ * as context, never rendered as a to-do queue.
+ */
+export function buildLinkReviewQueue<
+  Post extends LinkReviewPost,
+  Item extends LinkReviewItem,
+  Link extends LinkReviewLink,
+>(posts: Post[], items: Item[], links: Link[]) {
+  const linkedMedia = new Set(links.map((link) => link.media_id));
+  const linkedItems = new Set(links.map((link) => link.item_id));
+  const orphanPosts = posts.filter((post) => !linkedMedia.has(post.media_id));
+  return {
+    items: items.filter((item) => !linkedItems.has(item.id)).map((item) => ({
+      ...item,
+      candidates: exactCaptionCandidates(item, orphanPosts),
+    })),
+    orphan_post_count: orphanPosts.length,
+  };
+}
+
+function exactCaptionCandidates(item: LinkReviewItem, posts: LinkReviewPost[]) {
+  const itemCaption = normalizeLinkCaption(item.caption);
+  const itemPublishedAt = toLinkReviewDate(item.published_at);
+  if (itemCaption.length < 50 || !itemPublishedAt) return [];
+  return posts.flatMap((post) => {
+    const postCaption = normalizeLinkCaption(post.caption);
+    const postPublishedAt = toLinkReviewDate(post.published_at);
+    if (!postPublishedAt || !postCaption.startsWith(itemCaption)) return [];
+    const daysApart = Math.abs(Math.round((postPublishedAt.getTime() - itemPublishedAt.getTime()) / 86_400_000));
+    return daysApart <= 3 ? [{ media_id: post.media_id, match: "exact_caption" as const, days_apart: daysApart }] : [];
+  });
+}
+
+function normalizeLinkCaption(value: string | null | undefined) {
+  return String(value ?? "")
+    .replace(/[\u064B-\u0652\u0640]/g, "")
+    .replace(/[أإآٱ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه").replace(/ؤ/g, "و")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function toLinkReviewDate(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export type AnalyticsSyncPayload = {
   idempotency_key: string;
   source_timestamp: string;
