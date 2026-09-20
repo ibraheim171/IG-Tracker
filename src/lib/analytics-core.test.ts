@@ -350,7 +350,7 @@ test("range snapshots never reject valid future April or May analytics", () => {
 });
 
 test("account range ingestion is not executable by browser roles", () => {
-  const sql = readFileSync("supabase/migrations/20260920100000_harden_account_range_ingestion_grants.sql", "utf8");
+  const sql = readFileSync("supabase/migrations/20260920084611_harden_account_range_ingestion_grants.sql", "utf8");
   const target = "public.ingest_account_range_snapshots(jsonb, timestamptz, uuid)";
   assert.match(sql, new RegExp(`revoke all on function ${target.replace(/[().]/g, "\\$&")} from public`, "i"));
   assert.match(sql, new RegExp(`revoke all on function ${target.replace(/[().]/g, "\\$&")} from anon`, "i"));
