@@ -67,7 +67,7 @@ test("ambiguous canonical matches create no guessed association", () => {
   ]), []);
 });
 
-test("link review makes only unpublished item associations actionable while keeping orphan post count as context", () => {
+test("link review makes only unlinked published item associations actionable while keeping orphan post count as context", () => {
   const queue = buildLinkReviewQueue(
     [
       { media_id: "linked-post", published_at: "2026-09-01T21:00:00Z", media_type: "IMAGE", product_type: "FEED", permalink: "https://instagram.com/p/LINKED/", caption: "موجود" },
@@ -81,6 +81,14 @@ test("link review makes only unpublished item associations actionable while keep
   );
   assert.deepEqual(queue.items.map((item) => item.id), ["needs-link"]);
   assert.equal(queue.orphan_post_count, 1);
+});
+
+test("link review excludes an item already represented by the durable link audit", () => {
+  const posts = [{ media_id: "linked-post", published_at: "2026-09-01T21:00:00Z", caption: "منشور مرتبط ومسجل في سجل الربط الدائم" }];
+  const items = [{ id: "linked-item", published_at: "2026-09-01T21:00:00Z", caption: "منشور مرتبط ومسجل في سجل الربط الدائم" }];
+  const queue = buildLinkReviewQueue(posts, items, [{ item_id: "linked-item", media_id: "linked-post" }]);
+  assert.equal(queue.items.some((row) => row.id === "linked-item"), false);
+  assert.equal(queue.orphan_post_count, 0);
 });
 
 test("link review surfaces an exact caption and date match as a documented suggestion", () => {

@@ -69,11 +69,11 @@ export type PerformanceAggregate = {
   median_signal: number | null;
   sample_sufficient: boolean;
 };
-export type AccountDailyInsight = { date: string; followers: number | null; media_count: number | null; reach: number | null; views: number | null; reach_followers: number | null; reach_non_followers: number | null; follows: number | null; unfollows: number | null; missing_metrics: string[] };
+export type AccountDailyInsight = { date: string; followers: number | null; media_count: number | null; reach: number | null; views: number | null; reach_followers: number | null; reach_non_followers: number | null; follows: number | null; unfollows: number | null; missing_metrics: string[]; source_timestamp?: string | null };
 export type AccountRangeMetric = { total: number | null; measured_days: number; expected_days: number };
 export type AccountRangeFollowerSummary = { start: number | null; end: number | null; change: number | null; measured_days: number; expected_days: number };
 export type AccountRangeSummary = { followers: AccountRangeFollowerSummary; reach: AccountRangeMetric; views: AccountRangeMetric; follows: AccountRangeMetric; unfollows: AccountRangeMetric };
-export type DemographicInsight = { snapshot_date: string; dimension: string; key: string; value: number | null };
+export type DemographicInsight = { snapshot_date: string; dimension: string; key: string; value: number | null; source_timestamp?: string | null };
 export type CollabInsight = { collaboration_date: string; partner: string; collaboration_type: string | null; follows_lift: number | null; reach_lift_pct: number | null; nonfollower_lift_pct: number | null };
 export type SyncRunInsight = {
   id: string;

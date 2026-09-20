@@ -984,6 +984,57 @@ export type Database = {
         }
         Relationships: []
       }
+      report_context_blocks: {
+        Row: {
+          block_type: string
+          created_at: string
+          created_by: string
+          formula_version: string
+          id: string
+          input_snapshot: Json
+          position: number
+          report_id: string
+          title: string
+        }
+        Insert: {
+          block_type: string
+          created_at?: string
+          created_by: string
+          formula_version: string
+          id?: string
+          input_snapshot: Json
+          position: number
+          report_id: string
+          title: string
+        }
+        Update: {
+          block_type?: string
+          created_at?: string
+          created_by?: string
+          formula_version?: string
+          id?: string
+          input_snapshot?: Json
+          position?: number
+          report_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "report_context_blocks_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "report_context_blocks_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: false
+            referencedRelation: "reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       reports: {
         Row: {
           author_id: string | null
@@ -1557,6 +1608,38 @@ export type Database = {
       }
     }
     Functions: {
+      admin_add_report_context_block: {
+        Args: { p_report_id: string; p_block_type: string; p_title: string; p_input_snapshot: Json; p_formula_version: string }
+        Returns: Database["public"]["Tables"]["report_context_blocks"]["Row"]
+      }
+      admin_delete_report_context_block: {
+        Args: { p_report_id: string; p_block_id: string }
+        Returns: undefined
+      }
+      admin_reorder_report_context_blocks: {
+        Args: { p_report_id: string; p_order: string[] }
+        Returns: Database["public"]["Tables"]["report_context_blocks"]["Row"][]
+      }
+      admin_analytics_comparison: {
+        Args: {
+          p_start: string
+          p_end: string
+          p_dimension: string
+          p_metric: string
+          p_keys: string[]
+          p_media_type?: string | null
+        }
+        Returns: {
+          dimension_key: string
+          dimension_name: string
+          participant_part: string | null
+          total_n: number
+          measured_n: number
+          median_value: number | null
+          is_thin: boolean
+          has_partial_reels: boolean
+        }[]
+      }
       admin_analytics_aggregates: {
         Args: { p_start: string; p_end: string; p_media_type?: string | null }
         Returns: {

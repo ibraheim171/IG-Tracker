@@ -5,15 +5,24 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState, type MouseEvent } from "react";
 
 const navigationItems = [
-  { href: "/", label: "خطة النشر", icon: "calendar" },
-  { href: "/ready", label: "جاهز للنشر", icon: "send" },
-  { href: "/waiting", label: "بانتظار", icon: "clock" },
-  { href: "/my", label: "موادي", icon: "file" },
-  { href: "/insights", label: "الإحصائيات", icon: "stats" },
-  { href: "/admin/data-export", label: "تصدير البيانات", icon: "download" },
+  { href: "/admin/dashboard", label: "لوحة الأدمن", icon: "dashboard", adminOnly: true },
+  { href: "/schedule", label: "خطة النشر", icon: "calendar", adminOnly: false },
+  { href: "/ready", label: "جاهز للنشر", icon: "send", adminOnly: false },
+  { href: "/waiting", label: "بانتظار", icon: "clock", adminOnly: false },
+  { href: "/my", label: "موادي", icon: "file", adminOnly: false },
+  { href: "/insights", label: "الإحصائيات", icon: "stats", adminOnly: true },
+  { href: "/admin/monthly-reports", label: "التقرير الشهري", icon: "report", adminOnly: true },
+  { href: "/admin/data-export", label: "تصدير البيانات", icon: "download", adminOnly: true },
 ] as const;
 
 function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon"] }) {
+  if (name === "dashboard") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6Z" />
+      </svg>
+    );
+  }
   if (name === "calendar") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -47,6 +56,13 @@ function NavigationIcon({ name }: { name: (typeof navigationItems)[number]["icon
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" />
+      </svg>
+    );
+  }
+  if (name === "report") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 3h9l3 3v15H6V3Zm3 5h6M9 12h6M9 16h4" />
       </svg>
     );
   }
@@ -85,9 +101,9 @@ export function AppNavigation({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <nav className={`nav-links${isAdmin ? " nav-links-admin" : ""}`} aria-label="التنقل الرئيسي">
-      {navigationItems.filter((item) => (item.href !== "/insights" && item.href !== "/admin/data-export") || isAdmin).map((item) => {
-        const isCurrent = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-        const isVisuallyActive = item.href === "/" ? visualPathname === "/" : visualPathname.startsWith(item.href);
+      {navigationItems.filter((item) => !item.adminOnly || isAdmin).map((item) => {
+        const isCurrent = pathname.startsWith(item.href);
+        const isVisuallyActive = visualPathname.startsWith(item.href);
         const isPending = pendingHref === item.href && !isCurrent;
         return (
           <Link

@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { insightRangePreset, type AccountRangeMetric, type InsightRange, type InsightsSnapshot, type PostCheckpoint } from "@/lib/insights";
 import { workflowLabel } from "@/lib/workflow-ui";
-import { AnalyticsLinkReview } from "@/components/analytics-link-review";
 
 type LoadState = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; snapshot: InsightsSnapshot };
 
@@ -85,7 +84,7 @@ export function InsightsDashboard({ initialRange }: { initialRange: InsightRange
 
       {state.kind === "loading" ? <section className="card" aria-live="polite"><p>جارٍ تحميل الإحصائيات…</p></section> : null}
       {state.kind === "error" ? <section className="card stack" role="alert"><p className="error">{state.message}</p><button className="button button-secondary" type="button" onClick={() => setRetry((value) => value + 1)}>إعادة المحاولة</button></section> : null}
-      {state.kind === "ready" ? <><InsightsContent snapshot={state.snapshot} /><AnalyticsLinkReview /></> : null}
+      {state.kind === "ready" ? <InsightsContent snapshot={state.snapshot} /> : null}
     </main>
   );
 }
