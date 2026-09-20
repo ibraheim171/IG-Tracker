@@ -351,9 +351,15 @@ test("range snapshots never reject valid future April or May analytics", () => {
 
 test("June historical placeholder views are corrected without touching May", () => {
   const sql = readFileSync("supabase/migrations/20260920122113_mark_unknown_june_account_views.sql", "utf8");
+  assert.match(sql, /begin\s*;/i);
+  assert.match(sql, /alter table public\.ig_account_daily\s+disable trigger ig_account_daily_immutable\s*;/i);
   assert.match(sql, /set\s+views\s*=\s*null/i);
   assert.match(sql, /array_append\(missing_metrics,\s*'views'\)/i);
   assert.match(sql, /date\s+between\s+date\s+'2026-06-01'\s+and\s+date\s+'2026-06-12'/i);
+  assert.match(sql, /alter table public\.ig_account_daily\s+enable trigger ig_account_daily_immutable\s*;/i);
+  assert.match(sql, /commit\s*;/i);
+  assert.ok(sql.indexOf("disable trigger ig_account_daily_immutable") < sql.indexOf("update public.ig_account_daily"));
+  assert.ok(sql.indexOf("update public.ig_account_daily") < sql.indexOf("enable trigger ig_account_daily_immutable"));
   assert.doesNotMatch(sql, /2026-05/i);
 });
 
