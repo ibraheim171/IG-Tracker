@@ -349,6 +349,14 @@ test("range snapshots never reject valid future April or May analytics", () => {
   assert.doesNotMatch(sql, /analytics_range_crosses_excluded_months\(range_start, range_end\)/i);
 });
 
+test("June historical placeholder views are corrected without touching May", () => {
+  const sql = readFileSync("supabase/migrations/20260920122113_mark_unknown_june_account_views.sql", "utf8");
+  assert.match(sql, /set\s+views\s*=\s*null/i);
+  assert.match(sql, /array_append\(missing_metrics,\s*'views'\)/i);
+  assert.match(sql, /date\s+between\s+date\s+'2026-06-01'\s+and\s+date\s+'2026-06-12'/i);
+  assert.doesNotMatch(sql, /2026-05/i);
+});
+
 test("account range ingestion is not executable by browser roles", () => {
   const sql = readFileSync("supabase/migrations/20260920084611_harden_account_range_ingestion_grants.sql", "utf8");
   const target = "public.ingest_account_range_snapshots(jsonb, timestamptz, uuid)";
