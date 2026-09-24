@@ -19,7 +19,7 @@ function metricWithMeasuredN(value: number | null, measuredN: number) {
 }
 
 function RangeMetricCard({ label, summary }: { label: string; summary: AccountRangeMetric }) {
-  return <article className="card insight-card"><span>{label}</span><strong className="num">{metric(summary.total)}</strong><small className="muted">{number(summary.measured_days)} من {number(summary.expected_days)} يومًا مقاسًا</small></article>;
+  return <article className="card insight-card"><span>{label}</span><strong className="num">{metric(summary.daily_sum)}</strong><small className="muted">{number(summary.measured_days)} من {number(summary.expected_days)} يومًا مقاسًا</small></article>;
 }
 
 function dateTime(value: string) {
@@ -138,7 +138,7 @@ function InsightsContent({ snapshot }: { snapshot: InsightsSnapshot }) {
 
     <section className="card stack">
       <div><h2>تغطية قياس الحساب</h2><p className="muted">لا يُعرض إجمالي المقياس إلا عندما تغطي القراءات كل أيام النطاق. المتابعون قراءة بداية/نهاية، وليست مجموعًا يوميًا.</p></div>
-      {snapshot.account_summary ? <div className="insight-card-grid"><RangeMetricCard label="الوصول" summary={snapshot.account_summary.reach} /><RangeMetricCard label="المشاهدات" summary={snapshot.account_summary.views} /><RangeMetricCard label="المتابعات" summary={snapshot.account_summary.follows} /><article className="card insight-card"><span>تغير المتابعين</span><strong className="num">{metric(snapshot.account_summary.followers.change)}</strong><small className="muted">{number(snapshot.account_summary.followers.measured_days)} من {number(snapshot.account_summary.followers.expected_days)} يومًا مقاسًا</small></article></div> : null}
+      {snapshot.account_summary ? <div className="insight-card-grid"><RangeMetricCard label="مجموع الوصول اليومي المقاس" summary={snapshot.account_summary.reach} /><RangeMetricCard label="مجموع المشاهدات اليومية المقاسة" summary={snapshot.account_summary.views} /><RangeMetricCard label="مجموع المتابعات اليومية المقاسة" summary={snapshot.account_summary.follows} /><article className="card insight-card"><span>التغير بين حدّي الفترة</span><strong className="num">{metric(snapshot.account_summary.followers.full_period_change)}</strong><small className="muted">{number(snapshot.account_summary.followers.measured_days)} من {number(snapshot.account_summary.followers.expected_days)} يومًا مقاسًا</small></article></div> : null}
     </section>
 
     <section className="card stack">

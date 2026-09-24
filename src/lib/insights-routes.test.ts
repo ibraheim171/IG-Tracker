@@ -41,9 +41,9 @@ test("analytics shell is factual and excludes operational link review", () => {
 test("account pulse exposes coverage and Meta limitations beside the charts", () => {
   const pulse = read("../components/insights/account-pulse.tsx");
   const chart = read("../components/insights/metric-line-chart.tsx");
-  assert.match(pulse, /التغير في عدد المتابعين/);
+  assert.match(pulse, /التغير بين حدّي الفترة/);
   assert.match(pulse, /وصول غير المتابعين/);
-  assert.match(pulse, /إلغاء المتابعة غير متاح من Meta/);
+  assert.match(pulse, /Meta لا يزوّدنا حاليًا بعدد إلغاءات المتابعة/);
   assert.match(chart, /lineSegments/);
   assert.match(chart, /role="img"/);
 });

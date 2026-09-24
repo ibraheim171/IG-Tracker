@@ -1,4 +1,5 @@
 import type { Json, TablesInsert } from "./database.types.ts";
+import { ADVANCED_ANALYTICS_FORMULA_VERSION, advancedReportDisplayRows, validateStoredAdvancedReportContextSnapshot } from "./advanced-report-context.ts";
 
 export const ANALYTICS_FORMULA_VERSION = "analytics-formulas-v1";
 export const reportBlockTypes = ["account", "comparison", "partner_track", "posts", "audience"] as const;
@@ -101,6 +102,15 @@ export function composeMonthlyReportInput(
   blocks: Array<{ title: string; block_type: string; input_snapshot: unknown; formula_version: string }>,
 ) {
   const sections = blocks.map((block, index) => {
+    if (block.formula_version === ADVANCED_ANALYTICS_FORMULA_VERSION) {
+      if (!validateStoredAdvancedReportContextSnapshot(block.input_snapshot)) throw new Error("INVALID_STORED_REPORT_CONTEXT");
+      const snapshot = block.input_snapshot;
+      const rows = advancedReportDisplayRows(snapshot).map((row) => `| ${cell(row.label)} | ${displaySnapshotValue(row.cohortA)} | N=${row.aMeasuredN.toLocaleString("en-US")} | ${displaySnapshotValue(row.cohortB)} | N=${row.bMeasuredN.toLocaleString("en-US")} |`).join("\n");
+      const cohortA = snapshot.request.cohorts[0];
+      const cohortB = snapshot.request.cohorts[1];
+      const warnings = snapshot.warnings.length ? snapshot.warnings.map((warning) => `- ${warningLabels[warning]}`).join("\n") : "- لا توجد تحذيرات مسجلة";
+      return `## ${index + 1}. ${block.title}\n\n- النوع: مقارنة متقدمة\n- عمر القياس: D${snapshot.request.checkpoint}\n- سياسة اللقطة: ${snapshot.result.checkpoint_policy_version}\n- المجموعة A: ${cohortA.label} (${cohortA.range.start} — ${cohortA.range.end})\n- المجموعة B: ${cohortB.label} (${cohortB.range.start} — ${cohortB.range.end})\n- المقاييس: ${snapshot.request.metrics.join("، ")}\n- وقت المصدر: ${snapshot.source_time ?? "—"}\n- وقت إنشاء اللقطة: ${snapshot.created_time}\n- بصمة النتيجة: ${snapshot.result.result_hash}\n- إصدار المعادلات: ${block.formula_version}\n\n| المقياس | A | عينة A | B | عينة B |\n|---|---:|---:|---:|---:|\n${rows}\n\n### تحذيرات البيانات\n${warnings}`;
+    }
     if (block.formula_version !== ANALYTICS_FORMULA_VERSION) throw new Error("INVALID_STORED_REPORT_CONTEXT");
     const validated = validateReportContextBlock({ blockType: block.block_type, title: block.title, snapshot: block.input_snapshot });
     if (!validated.ok) throw new Error("INVALID_STORED_REPORT_CONTEXT");

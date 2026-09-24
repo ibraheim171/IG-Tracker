@@ -70,8 +70,19 @@ export type PerformanceAggregate = {
   sample_sufficient: boolean;
 };
 export type AccountDailyInsight = { date: string; followers: number | null; media_count: number | null; reach: number | null; views: number | null; reach_followers: number | null; reach_non_followers: number | null; follows: number | null; unfollows: number | null; missing_metrics: string[]; source_timestamp?: string | null };
-export type AccountRangeMetric = { total: number | null; measured_days: number; expected_days: number };
-export type AccountRangeFollowerSummary = { start: number | null; end: number | null; change: number | null; measured_days: number; expected_days: number };
+export type AccountRangeMetric = { daily_sum: number | null; measured_days: number; expected_days: number };
+export type AccountRangeFollowerSummary = {
+  boundary_start: number | null;
+  boundary_end: number | null;
+  first_observed: number | null;
+  last_observed: number | null;
+  first_observed_date: string | null;
+  last_observed_date: string | null;
+  observed_change: number | null;
+  full_period_change: number | null;
+  measured_days: number;
+  expected_days: number;
+};
 export type AccountRangeSummary = { followers: AccountRangeFollowerSummary; reach: AccountRangeMetric; views: AccountRangeMetric; follows: AccountRangeMetric; unfollows: AccountRangeMetric };
 export type DemographicInsight = { snapshot_date: string; dimension: string; key: string; value: number | null; source_timestamp?: string | null };
 export type CollabInsight = { collaboration_date: string; partner: string; collaboration_type: string | null; follows_lift: number | null; reach_lift_pct: number | null; nonfollower_lift_pct: number | null };
@@ -186,12 +197,26 @@ export function summarizeAccountRange(range: InsightRange, rows: AccountDailyIns
   const ordered = [...rows].filter((row) => row.date >= range.start && row.date <= range.end).sort((left, right) => left.date.localeCompare(right.date));
   const metric = (field: "reach" | "views" | "follows" | "unfollows"): AccountRangeMetric => {
     const values = ordered.map((row) => row[field]).filter((value): value is number => value !== null);
-    return { total: values.length === expectedDays ? values.reduce((sum, value) => sum + value, 0) : null, measured_days: values.length, expected_days: expectedDays };
+    return { daily_sum: values.length ? values.reduce((sum, value) => sum + value, 0) : null, measured_days: values.length, expected_days: expectedDays };
   };
   const followers = ordered.filter((row) => row.followers !== null);
-  const first = followers[0]?.followers ?? null;
-  const last = followers.at(-1)?.followers ?? null;
-  return { followers: { start: first, end: last, change: first !== null && last !== null ? last - first : null, measured_days: followers.length, expected_days: expectedDays }, reach: metric("reach"), views: metric("views"), follows: metric("follows"), unfollows: metric("unfollows") };
+  const first = followers[0] ?? null;
+  const last = followers.at(-1) ?? null;
+  const boundaryStart = ordered.find((row) => row.date === range.start)?.followers ?? null;
+  const boundaryEnd = ordered.find((row) => row.date === range.end)?.followers ?? null;
+  const observedChange = first && last && first.date !== last.date ? (last.followers as number) - (first.followers as number) : null;
+  return { followers: {
+    boundary_start: boundaryStart,
+    boundary_end: boundaryEnd,
+    first_observed: first?.followers ?? null,
+    last_observed: last?.followers ?? null,
+    first_observed_date: first?.date ?? null,
+    last_observed_date: last?.date ?? null,
+    observed_change: observedChange,
+    full_period_change: boundaryStart !== null && boundaryEnd !== null && range.start !== range.end ? boundaryEnd - boundaryStart : null,
+    measured_days: followers.length,
+    expected_days: expectedDays,
+  }, reach: metric("reach"), views: metric("views"), follows: metric("follows"), unfollows: metric("unfollows") };
 }
 
 function dateInTimeZone(date: Date, timeZone: string) {

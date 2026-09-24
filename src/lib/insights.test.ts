@@ -16,17 +16,35 @@ test("range presets keep a custom range possible while making common windows one
   assert.deepEqual(insightRangePreset("three_months", new Date("2026-09-14T12:00:00Z")), { start: "2026-06-17", end: "2026-09-14" });
 });
 
-test("account range totals remain unknown until every day is measured", () => {
+test("account range keeps measured daily sums separate from full-period follower change", () => {
   const summary = summarizeAccountRange({ start: "2026-09-01", end: "2026-09-03" }, [
     { date: "2026-09-01", followers: 100, media_count: null, reach: 10, views: 20, reach_followers: null, reach_non_followers: null, follows: 2, unfollows: null, missing_metrics: [] },
     { date: "2026-09-02", followers: 102, media_count: null, reach: 20, views: null, reach_followers: null, reach_non_followers: null, follows: 3, unfollows: null, missing_metrics: ["views"] },
     { date: "2026-09-03", followers: 104, media_count: null, reach: 10, views: 30, reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: ["follows"] },
   ]);
-  assert.equal(summary.reach.total, 40);
-  assert.equal(summary.views.total, null);
+  assert.equal(summary.reach.daily_sum, 40);
+  assert.equal(summary.views.daily_sum, 50);
   assert.equal(summary.views.measured_days, 2);
-  assert.equal(summary.follows.total, null);
-  assert.equal(summary.followers.change, 4);
+  assert.equal(summary.follows.daily_sum, 5);
+  assert.equal(summary.followers.full_period_change, 4);
+  assert.equal(summary.followers.observed_change, 4);
+  assert.equal(summary.followers.first_observed_date, "2026-09-01");
+  assert.equal(summary.followers.last_observed_date, "2026-09-03");
+});
+
+test("follower change is not fabricated when a boundary is missing or only one observation exists", () => {
+  const missingStart = summarizeAccountRange({ start: "2026-09-01", end: "2026-09-03" }, [
+    { date: "2026-09-01", followers: null, media_count: null, reach: null, views: null, reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: ["followers"] },
+    { date: "2026-09-02", followers: 102, media_count: null, reach: null, views: null, reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: [] },
+    { date: "2026-09-03", followers: 104, media_count: null, reach: null, views: null, reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: [] },
+  ]);
+  assert.equal(missingStart.followers.full_period_change, null);
+  assert.equal(missingStart.followers.observed_change, 2);
+  const one = summarizeAccountRange({ start: "2026-09-01", end: "2026-09-03" }, [
+    { date: "2026-09-02", followers: 102, media_count: null, reach: null, views: null, reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: [] },
+  ]);
+  assert.equal(one.followers.observed_change, null);
+  assert.equal(one.followers.full_period_change, null);
 });
 
 test("legacy placeholder account views remain unknown instead of becoming real zeros", () => {

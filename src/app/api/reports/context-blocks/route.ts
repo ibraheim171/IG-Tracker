@@ -4,6 +4,7 @@ import { analyticsServiceClient } from "@/lib/analytics-server";
 import type { Json } from "@/lib/database.types";
 import { isUuid } from "@/lib/monthly-reports";
 import { ANALYTICS_FORMULA_VERSION, validateReportContextBlock } from "@/lib/report-context";
+import { buildAdvancedReportContext, parseAdvancedReportContextRequest } from "@/lib/advanced-report-context";
 
 function withCookies(body: object, status: number, source: NextResponse) {
   const response = NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -46,6 +47,23 @@ export async function POST(request: NextRequest) {
   if (!access.ok) return access.response;
   const body = await request.json().catch(() => null);
   if (!isUuid(body?.reportId)) return withCookies({ error: "معرّف التقرير غير صحيح.", code: "E_REPORT" }, 400, access.sessionResponse);
+  if (body?.advanced !== undefined) {
+    const parsed = parseAdvancedReportContextRequest(body.advanced);
+    if (!parsed.ok) return withCookies({ error: parsed.message, code: parsed.code }, 400, access.sessionResponse);
+    const rerun = await access.auth.supabase.rpc("admin_advanced_analytics_comparison", { p_request: parsed.value.request as unknown as Json });
+    if (rerun.error || rerun.data === null) return withCookies({ error: "تعذر إعادة حساب المقارنة قبل حفظها.", code: "E_ADVANCED_COMPARISON" }, 503, access.sessionResponse);
+    const built = buildAdvancedReportContext(parsed.value, rerun.data);
+    if (!built.ok) return withCookies({ error: built.message, code: built.code }, built.code === "E_COMPARISON_STALE" ? 409 : 400, access.sessionResponse);
+    const result = await access.auth.supabase.rpc("admin_add_report_context_block", {
+      p_report_id: body.reportId,
+      p_block_type: built.value.blockType,
+      p_title: built.value.title,
+      p_input_snapshot: built.value.snapshot as unknown as Json,
+      p_formula_version: built.value.formulaVersion,
+    });
+    if (result.error) return withCookies({ error: "تعذر إضافة المقطع للتقرير.", code: "E_BLOCK_ADD" }, 503, access.sessionResponse);
+    return withCookies({ block: result.data }, 201, access.sessionResponse);
+  }
   const validation = validateReportContextBlock(body?.block);
   if (!validation.ok) return withCookies({ error: validation.message, code: validation.code }, 400, access.sessionResponse);
   const result = await access.auth.supabase.rpc("admin_add_report_context_block", {

@@ -1608,6 +1608,10 @@ export type Database = {
       }
     }
     Functions: {
+      admin_advanced_analytics_comparison: {
+        Args: { p_request: Json }
+        Returns: Json
+      }
       admin_add_report_context_block: {
         Args: { p_report_id: string; p_block_type: string; p_title: string; p_input_snapshot: Json; p_formula_version: string }
         Returns: Database["public"]["Tables"]["report_context_blocks"]["Row"]

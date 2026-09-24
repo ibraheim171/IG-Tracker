@@ -3,10 +3,13 @@
 import { useState } from "react";
 import { ReportContextPicker } from "@/components/reports/report-context-picker";
 import type { ValidReportContextBlock } from "@/lib/report-context";
+import type { AdvancedReportContextInput } from "@/lib/advanced-report-context";
 
 type Report = { id: string; title: string; month: string };
 
-export function AddToReportButton({ block }: { block: ValidReportContextBlock }) {
+type Props = { block: ValidReportContextBlock; advanced?: never } | { block?: never; advanced: AdvancedReportContextInput };
+
+export function AddToReportButton(props: Props) {
   const [open, setOpen] = useState(false);
   const [reports, setReports] = useState<Report[]>([]);
   const [busy, setBusy] = useState(false);
@@ -20,5 +23,5 @@ export function AddToReportButton({ block }: { block: ValidReportContextBlock })
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : "تعذر تحميل التقارير."); }
     finally { setBusy(false); }
   }
-  return <div className="add-to-report"><button className="button button-secondary" type="button" disabled={busy} onClick={openPicker}>{busy ? "جارٍ التحميل…" : "أضف للتقرير"}</button>{message ? <span className={message.startsWith("تم") ? "muted" : "error"}>{message}</span> : null}{open ? <ReportContextPicker reports={reports} block={block} onClose={() => setOpen(false)} onAdded={() => { setOpen(false); setMessage("تمت إضافة المقطع للتقرير."); }} /> : null}</div>;
+  return <div className="add-to-report"><button className="button button-secondary" type="button" disabled={busy} onClick={openPicker}>{busy ? "جارٍ التحميل…" : "أضف للتقرير"}</button>{message ? <span className={message.startsWith("تم") ? "muted" : "error"}>{message}</span> : null}{open ? <ReportContextPicker reports={reports} {...props} onClose={() => setOpen(false)} onAdded={() => { setOpen(false); setMessage("تمت إضافة المقطع للتقرير."); }} /> : null}</div>;
 }

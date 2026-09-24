@@ -8,6 +8,9 @@ import { MetricDefinitions } from "./metric-definitions";
 import { AddToReportButton } from "./add-to-report-button";
 import { reportMetricFormulas, type ValidReportContextBlock } from "@/lib/report-context";
 import { MetricLineChart } from "./metric-line-chart";
+import { AdvancedComparison } from "./advanced-comparison";
+import type { TeamMemberOption } from "@/lib/admin-create-item";
+import type { RoleName } from "@/lib/ui-data";
 
 type Option = { key: string; name: string };
 type Options = Record<ComparisonDimension, Option[]>;
@@ -32,7 +35,7 @@ const metrics: Array<{ value: ComparisonMetric; label: string }> = [
   { value: "item_count", label: "عدد المواد" },
 ];
 
-export function ComparisonBuilder({ range }: { range: InsightRange }) {
+export function QuickComparisonBuilder({ range }: { range: InsightRange }) {
   const [options, setOptions] = useState<Options | null>(null);
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const [dimension, setDimension] = useState<ComparisonDimension>("track");
@@ -149,4 +152,9 @@ export function ComparisonBuilder({ range }: { range: InsightRange }) {
     {state.kind === "ready" ? <section className="card stack"><div className="insight-result-head"><div><h2>{metricLabel}</h2><p className="muted">الفترة: <span className="num">{range.start}</span> — <span className="num">{range.end}</span></p></div>{reportBlock ? <AddToReportButton block={reportBlock} /> : null}</div>{view === "timeline" ? <><MetricLineChart title={`خط زمني شهري — ${metricLabel}`} sourceTime={state.sourceTime} series={timelineSeries} /><p className="muted">كل نقطة تمثل وسيط الشهر الظاهر. تفاصيل حجم العينة للفترة كاملة أدناه.</p></> : null}<ComparisonChart rows={displayedRows} metricLabel={metricLabel} /></section> : null}
     <MetricDefinitions />
   </div>;
+}
+
+export function ComparisonBuilder({ range, currentUserId, roles, teamMembers, teamMembersLoadError }: { range: InsightRange; currentUserId: string; roles: RoleName[]; teamMembers: TeamMemberOption[]; teamMembersLoadError: string | null }) {
+  const [mode, setMode] = useState<"advanced" | "quick">("advanced");
+  return <div className="stack"><div className="comparison-mode-switch" role="group" aria-label="نوع المقارنة"><button className={`button ${mode === "advanced" ? "" : "button-secondary"}`} type="button" onClick={() => setMode("advanced")}>المقارنة المتقدمة</button><button className={`button ${mode === "quick" ? "" : "button-secondary"}`} type="button" onClick={() => setMode("quick")}>المقارنة السريعة</button></div>{mode === "advanced" ? <AdvancedComparison range={range} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} teamMembersLoadError={teamMembersLoadError} /> : <QuickComparisonBuilder range={range} />}</div>;
 }

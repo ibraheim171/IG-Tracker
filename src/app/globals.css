@@ -436,6 +436,25 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
 .audience-bar i { display: block; block-size: 100%; border-radius: inherit; background: color-mix(in srgb, var(--accent) 70%, var(--rule)); }
 .audience-missing { font-size: 0.82rem; }
 .comparison-controls, .post-filters { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+.comparison-mode-switch { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.comparison-mode-switch .button { flex: 1 1 12rem; }
+.advanced-comparison-heading, .advanced-cohort-title, .advanced-result-meta, .advanced-timeline-n { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem 1rem; flex-wrap: wrap; }
+.advanced-comparison-heading { align-items: end; }
+.advanced-checkpoint { flex: 0 1 10rem; }
+.advanced-cohort-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+.advanced-cohort { min-inline-size: 0; }
+.advanced-cohort-title b { display: grid; place-items: center; flex: 0 0 2.25rem; inline-size: 2.25rem; block-size: 2.25rem; border-radius: 999px; background: var(--accent); color: var(--card); }
+.advanced-cohort-title .input { flex: 1 1 12rem; }
+.advanced-people-options { display: grid; gap: 0.5rem; margin-block-start: 0.5rem; max-block-size: 22rem; overflow-y: auto; }
+.advanced-person-option { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+.advanced-result-meta, .advanced-timeline-n { justify-content: start; color: color-mix(in srgb, var(--ink) 68%, var(--card)); font-size: 0.88rem; }
+.advanced-result-table { min-inline-size: 64rem; }
+.advanced-result-table tbody tr { cursor: pointer; }
+.advanced-result-table tbody tr.is-selected { background: color-mix(in srgb, var(--accent-soft) 36%, var(--card)); }
+.advanced-result-table small { display: block; inline-size: fit-content; margin-block-start: 0.3rem; }
+.button-link { border: 0; background: transparent; color: var(--accent); padding: 0; font: inherit; font-weight: 800; text-align: start; text-decoration: underline; text-underline-offset: 0.2rem; }
+.advanced-submit { inline-size: min(100%, 18rem); justify-self: end; }
+.advanced-source-time { overflow-wrap: anywhere; }
 .comparison-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; margin-block-start: 0.5rem; max-block-size: 18rem; overflow-y: auto; }
 .comparison-option { display: flex; align-items: center; gap: 0.5rem; min-block-size: 44px; padding: 0.45rem 0.6rem; border: 1px solid var(--rule); border-radius: 0.5rem; }
 .comparison-option input { flex: 0 0 auto; inline-size: 1rem; block-size: 1rem; min-block-size: 1rem; }
@@ -645,6 +664,8 @@ h1, h2 { font-family: var(--font-heading), sans-serif; }
   .insight-card-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .audience-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .comparison-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .advanced-cohort-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .advanced-person-option { grid-template-columns: minmax(0, 1fr) minmax(8rem, 0.6fr); align-items: center; }
   .comparison-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .matrix-head { grid-template-columns: minmax(0, 1fr) minmax(12rem, 18rem); align-items: end; }
   .post-filters { grid-template-columns: repeat(4, minmax(0, 1fr)); }

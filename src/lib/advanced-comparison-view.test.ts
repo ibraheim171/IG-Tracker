@@ -1,0 +1,4 @@
+import assert from "node:assert/strict";import test from "node:test";
+import {advancedReelsWarning,advancedSampleLabel,advancedValue,differenceUnit,timelineMetricRows} from "./advanced-comparison-view.ts";
+test("keeps null distinct from measured zero and labels samples factually",()=>{assert.equal(advancedValue(null),"—");assert.equal(advancedValue(0),"0");assert.equal(advancedSampleLabel(1),"حالة منفردة");assert.equal(advancedSampleLabel(3),"عيّنة صغيرة");assert.equal(advancedSampleLabel(4),null);assert.equal(differenceUnit("save_rate"),"نقطة مئوية");});
+test("warns only for an actually missing Reel component and keeps point N",()=>{const row={media_type:"REELS",exclusion_reasons:{signal:"missing_component"}} as never;assert.equal(advancedReelsWarning("signal",[row]),true);assert.equal(advancedReelsWarning("reach",[row]),false);assert.deepEqual(timelineMetricRows([{month:"2026-07",cohort:"A",metric:"reach",value:4,eligible_n:2,measured_n:1}],"reach")[0].n,1);});

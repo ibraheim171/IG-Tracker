@@ -3,10 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { displaySnapshotValue, type ValidReportContextBlock } from "@/lib/report-context";
 import { restoreDialogFocus, trapDialogFocus } from "@/lib/dialog-focus";
+import type { AdvancedReportContextInput } from "@/lib/advanced-report-context";
+import { advancedReportDisplayRows, validateStoredAdvancedReportContextSnapshot } from "@/lib/advanced-report-context";
 
 type Report = { id: string; title: string; month: string };
 
-export function ReportContextPicker({ reports, block, onClose, onAdded }: { reports: Report[]; block: ValidReportContextBlock; onClose: () => void; onAdded: () => void }) {
+type PickerProps = { reports: Report[]; onClose: () => void; onAdded: () => void } & ({ block: ValidReportContextBlock; advanced?: never } | { block?: never; advanced: AdvancedReportContextInput });
+
+export function ReportContextPicker({ reports, block, advanced, onClose, onAdded }: PickerProps) {
   const [reportId, setReportId] = useState(reports[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -27,7 +31,7 @@ export function ReportContextPicker({ reports, block, onClose, onAdded }: { repo
   async function add() {
     setBusy(true); setError("");
     try {
-      const response = await fetch("/api/reports/context-blocks", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ reportId, block }) });
+      const response = await fetch("/api/reports/context-blocks", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify(advanced ? { reportId, advanced } : { reportId, block }) });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "تعذر إضافة المقطع.");
       onAdded();
@@ -37,13 +41,19 @@ export function ReportContextPicker({ reports, block, onClose, onAdded }: { repo
   return <div className="veil" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section ref={dialogRef} className="confirm-panel stack" role="dialog" aria-modal="true" aria-labelledby="report-picker-title" tabIndex={-1}>
     <div className="users-toolbar"><h2 id="report-picker-title">أضف للتقرير</h2><button ref={closeButtonRef} className="button button-secondary" type="button" onClick={onClose}>إغلاق</button></div>
     {!reports.length ? <p className="notice">أنشئ مساحة تقرير شهري أولًا من صفحة «التقرير الشهري».</p> : <label className="field">التقرير<select className="input" value={reportId} onChange={(event) => setReportId(event.target.value)}>{reports.map((report) => <option value={report.id} key={report.id}>{report.title} — {report.month.slice(0, 7)}</option>)}</select></label>}
-    <div className="report-block-preview"><h3>معاينة المقطع</h3><p>{block.title}</p><p className="muted">{block.snapshot.period ? <span className="num">{block.snapshot.period.start} — {block.snapshot.period.end}</span> : "أحدث لقطة متاحة"}</p><div className="table-wrap"><table><thead><tr><th>القيمة</th><th>الرقم</th><th>العينة</th></tr></thead><tbody>{block.snapshot.values.map((row) => <tr key={row.label}><td>{row.label}</td><td className="num">{displaySnapshotValue(row.value)}</td><td className="num">N={row.measured_n.toLocaleString("en-US")}</td></tr>)}</tbody></table></div></div>
+    {advanced ? <div className="report-block-preview"><h3>معاينة المقطع</h3><p>{advanced.title}</p><p className="muted">D{advanced.request.checkpoint} · <span className="num">{advanced.request.cohorts[0].range.start} — {advanced.request.cohorts[0].range.end}</span> مقابل <span className="num">{advanced.request.cohorts[1].range.start} — {advanced.request.cohorts[1].range.end}</span></p><p className="muted">سيعيد الخادم حساب المقارنة ويتحقق من بصمتها قبل حفظ اللقطة.</p></div> : block ? <div className="report-block-preview"><h3>معاينة المقطع</h3><p>{block.title}</p><p className="muted">{block.snapshot.period ? <span className="num">{block.snapshot.period.start} — {block.snapshot.period.end}</span> : "أحدث لقطة متاحة"}</p><div className="table-wrap"><table><thead><tr><th>القيمة</th><th>الرقم</th><th>العينة</th></tr></thead><tbody>{block.snapshot.values.map((row) => <tr key={row.label}><td>{row.label}</td><td className="num">{displaySnapshotValue(row.value)}</td><td className="num">N={row.measured_n.toLocaleString("en-US")}</td></tr>)}</tbody></table></div></div> : null}
     {error ? <p className="error">{error}</p> : null}
     <button className="button" type="button" disabled={!reportId || busy} onClick={add}>{busy ? "جارٍ الإضافة…" : "تأكيد إضافة المقطع"}</button>
   </section></div>;
 }
 
-type StoredBlock = { id: string; report_id: string; block_type: string; title: string; input_snapshot: ValidReportContextBlock["snapshot"]; formula_version: string; position: number; created_at: string };
+type StoredBlock = { id: string; report_id: string; block_type: string; title: string; input_snapshot: unknown; formula_version: string; position: number; created_at: string };
+
+function storedRows(snapshot: unknown) {
+  if (validateStoredAdvancedReportContextSnapshot(snapshot)) return advancedReportDisplayRows(snapshot).flatMap((row) => [{ label: `${row.label} — A`, value: row.cohortA, measured_n: row.aMeasuredN }, { label: `${row.label} — B`, value: row.cohortB, measured_n: row.bMeasuredN }]);
+  const validation = snapshot && typeof snapshot === "object" && "values" in snapshot ? (snapshot as ValidReportContextBlock["snapshot"]) : null;
+  return validation?.values ?? [];
+}
 
 export function ReportContextList({ reportId }: { reportId: string }) {
   const [blocks, setBlocks] = useState<StoredBlock[]>([]);
@@ -71,5 +81,5 @@ export function ReportContextList({ reportId }: { reportId: string }) {
     const body = await response.json(); if (!response.ok) { setMessage(body.error || "تعذر حذف المقطع."); return; }
     setBlocks((current) => current.filter((block) => block.id !== blockId)); setPendingDeleteId(null); setMessage("");
   }
-  return <section className="card stack"><div><h2>مقاطع التقرير</h2><p className="muted">الترتيب هنا هو ترتيب السياق الذي سيُجهز للمسودة.</p></div>{state === "loading" ? <p aria-live="polite">جارٍ تحميل المقاطع…</p> : null}{state === "error" ? <p className="error">{message}</p> : null}{state === "error" ? <button className="button button-secondary" type="button" onClick={() => setRetry((value) => value + 1)}>إعادة المحاولة</button> : null}{state === "ready" && !blocks.length ? <p className="muted">لم تُضف مقاطع بعد. افتح أي رسم أو مقارنة في الإحصائيات واضغط «أضف للتقرير».</p> : null}{state === "ready" ? <div className="report-context-list">{blocks.map((block, index) => <article key={block.id}><div><strong>{block.title}</strong><span className="muted">{block.block_type} · <span className="num">{block.formula_version}</span></span></div><details><summary>عرض الأرقام المحفوظة</summary><ul>{block.input_snapshot.values.map((value) => <li key={value.label}><span>{value.label}</span><b className="num">{displaySnapshotValue(value.value)} · N={value.measured_n.toLocaleString("en-US")}</b></li>)}</ul></details><div className="actions-row"><button className="button button-secondary" type="button" disabled={index === 0} onClick={() => reorder(index, -1)}>للأعلى</button><button className="button button-secondary" type="button" disabled={index === blocks.length - 1} onClick={() => reorder(index, 1)}>للأسفل</button>{pendingDeleteId === block.id ? <><button className="button button-danger" type="button" onClick={() => remove(block.id)}>تأكيد الحذف</button><button className="button button-secondary" type="button" onClick={() => setPendingDeleteId(null)}>إلغاء</button></> : <button className="button button-secondary" type="button" onClick={() => setPendingDeleteId(block.id)}>حذف المقطع</button>}</div></article>)}</div> : null}{message && state === "ready" ? <p className="error">{message}</p> : null}</section>;
+  return <section className="card stack"><div><h2>مقاطع التقرير</h2><p className="muted">الترتيب هنا هو ترتيب السياق الذي سيُجهز للمسودة.</p></div>{state === "loading" ? <p aria-live="polite">جارٍ تحميل المقاطع…</p> : null}{state === "error" ? <p className="error">{message}</p> : null}{state === "error" ? <button className="button button-secondary" type="button" onClick={() => setRetry((value) => value + 1)}>إعادة المحاولة</button> : null}{state === "ready" && !blocks.length ? <p className="muted">لم تُضف مقاطع بعد. افتح أي رسم أو مقارنة في الإحصائيات واضغط «أضف للتقرير».</p> : null}{state === "ready" ? <div className="report-context-list">{blocks.map((block, index) => <article key={block.id}><div><strong>{block.title}</strong><span className="muted">{block.block_type} · <span className="num">{block.formula_version}</span></span></div><details><summary>عرض الأرقام المحفوظة</summary><ul>{storedRows(block.input_snapshot).map((value) => <li key={value.label}><span>{value.label}</span><b className="num">{displaySnapshotValue(value.value)} · N={value.measured_n.toLocaleString("en-US")}</b></li>)}</ul></details><div className="actions-row"><button className="button button-secondary" type="button" disabled={index === 0} onClick={() => reorder(index, -1)}>للأعلى</button><button className="button button-secondary" type="button" disabled={index === blocks.length - 1} onClick={() => reorder(index, 1)}>للأسفل</button>{pendingDeleteId === block.id ? <><button className="button button-danger" type="button" onClick={() => remove(block.id)}>تأكيد الحذف</button><button className="button button-secondary" type="button" onClick={() => setPendingDeleteId(null)}>إلغاء</button></> : <button className="button button-secondary" type="button" onClick={() => setPendingDeleteId(block.id)}>حذف المقطع</button>}</div></article>)}</div> : null}{message && state === "ready" ? <p className="error">{message}</p> : null}</section>;
 }

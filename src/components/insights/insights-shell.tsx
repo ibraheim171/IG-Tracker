@@ -60,7 +60,7 @@ export function InsightsShell({ initialSection, initialRange, currentUserId, rol
     </> : null}
 
     {section === "pulse" ? <AccountPulse range={range} /> : null}
-    {section === "compare" ? <ComparisonBuilder range={range} /> : null}
+    {section === "compare" ? <ComparisonBuilder range={range} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} teamMembersLoadError={teamMembersLoadError} /> : null}
     {section === "matrix" ? <PartnerTrackMatrix range={range} /> : null}
     {section === "posts" ? <PostPerformanceTable range={range} currentUserId={currentUserId} roles={roles} teamMembers={teamMembers} teamMembersLoadError={teamMembersLoadError} /> : null}
     {section === "audience" ? <AudienceSnapshotView /> : null}
