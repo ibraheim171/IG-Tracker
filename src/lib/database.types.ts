@@ -232,41 +232,58 @@ export type Database = {
         }
         Relationships: []
       }
+      analytics_sync_runs: {
+        Row: { already_present_identical_count: number; completed_at: string | null; id: string; idempotency_key: string; inserted_count: number; received_at: string; received_count: number; rejected_count: number; request_sha256: string; row_counts: Json; safe_error_summary: string | null; signature_timestamp: string; source_timestamp: string; status: string; updated_count: number }
+        Insert: { already_present_identical_count?: number; completed_at?: string | null; id?: string; idempotency_key: string; inserted_count?: number; received_at?: string; received_count?: number; rejected_count?: number; request_sha256: string; row_counts?: Json; safe_error_summary?: string | null; signature_timestamp: string; source_timestamp: string; status: string; updated_count?: number }
+        Update: { already_present_identical_count?: number; completed_at?: string | null; id?: string; idempotency_key?: string; inserted_count?: number; received_at?: string; received_count?: number; rejected_count?: number; request_sha256?: string; row_counts?: Json; safe_error_summary?: string | null; signature_timestamp?: string; source_timestamp?: string; status?: string; updated_count?: number }
+        Relationships: []
+      }
       ig_account_daily: {
         Row: {
           date: string
           followers: number | null
           follows: number | null
           media_count: number | null
+          missing_metrics: string[]
           reach: number | null
           reach_followers: number | null
           reach_non_followers: number | null
           unfollows: number | null
           views: number | null
+          source_timestamp: string | null
+          sync_run_id: string | null
         }
         Insert: {
           date: string
           followers?: number | null
           follows?: number | null
           media_count?: number | null
+          missing_metrics?: string[]
           reach?: number | null
           reach_followers?: number | null
           reach_non_followers?: number | null
           unfollows?: number | null
           views?: number | null
+          source_timestamp?: string | null
+          sync_run_id?: string | null
         }
         Update: {
           date?: string
           followers?: number | null
           follows?: number | null
           media_count?: number | null
+          missing_metrics?: string[]
           reach?: number | null
           reach_followers?: number | null
           reach_non_followers?: number | null
           unfollows?: number | null
           views?: number | null
+          source_timestamp?: string | null
+          sync_run_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          { foreignKeyName: "ig_account_daily_sync_run_id_fkey"; columns: ["sync_run_id"]; isOneToOne: false; referencedRelation: "analytics_sync_runs"; referencedColumns: ["id"] },
+        ]
       }
       ig_demographics: {
         Row: {
@@ -274,20 +291,47 @@ export type Database = {
           key: string
           snapshot_date: string
           value: number | null
+          source_timestamp: string | null
+          sync_run_id: string | null
         }
         Insert: {
           dimension: string
           key: string
           snapshot_date: string
           value?: number | null
+          source_timestamp?: string | null
+          sync_run_id?: string | null
         }
         Update: {
           dimension?: string
           key?: string
           snapshot_date?: string
           value?: number | null
+          source_timestamp?: string | null
+          sync_run_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          { foreignKeyName: "ig_demographics_sync_run_id_fkey"; columns: ["sync_run_id"]; isOneToOne: false; referencedRelation: "analytics_sync_runs"; referencedColumns: ["id"] },
+        ]
+      }
+      ig_collabs: {
+        Row: { collaboration_date: string; collaboration_type: string | null; computed_at: string | null; created_at: string; follows_lift: number | null; id: string; net_follows_after: number | null; net_follows_before: number | null; nonfollower_after: number | null; nonfollower_before: number | null; nonfollower_lift_pct: number | null; notes: string | null; partner_id: number; reach_after: number | null; reach_before: number | null; reach_lift_pct: number | null; source_timestamp: string; sync_run_id: string }
+        Insert: { collaboration_date: string; collaboration_type?: string | null; computed_at?: string | null; created_at?: string; follows_lift?: number | null; id?: string; net_follows_after?: number | null; net_follows_before?: number | null; nonfollower_after?: number | null; nonfollower_before?: number | null; nonfollower_lift_pct?: number | null; notes?: string | null; partner_id: number; reach_after?: number | null; reach_before?: number | null; reach_lift_pct?: number | null; source_timestamp: string; sync_run_id: string }
+        Update: { collaboration_date?: string; collaboration_type?: string | null; computed_at?: string | null; created_at?: string; follows_lift?: number | null; id?: string; net_follows_after?: number | null; net_follows_before?: number | null; nonfollower_after?: number | null; nonfollower_before?: number | null; nonfollower_lift_pct?: number | null; notes?: string | null; partner_id?: number; reach_after?: number | null; reach_before?: number | null; reach_lift_pct?: number | null; source_timestamp?: string; sync_run_id?: string }
+        Relationships: [
+          { foreignKeyName: "ig_collabs_partner_id_fkey"; columns: ["partner_id"]; isOneToOne: false; referencedRelation: "partners"; referencedColumns: ["id"] },
+          { foreignKeyName: "ig_collabs_sync_run_id_fkey"; columns: ["sync_run_id"]; isOneToOne: false; referencedRelation: "analytics_sync_runs"; referencedColumns: ["id"] },
+        ]
+      }
+      ig_item_links: {
+        Row: { item_id: string; linked_at: string; linked_by: string | null; media_id: string; previous_legacy_media_id: string | null; reason: string; source: string }
+        Insert: { item_id: string; linked_at?: string; linked_by?: string | null; media_id: string; previous_legacy_media_id?: string | null; reason: string; source: string }
+        Update: { item_id?: string; linked_at?: string; linked_by?: string | null; media_id?: string; previous_legacy_media_id?: string | null; reason?: string; source?: string }
+        Relationships: [
+          { foreignKeyName: "ig_item_links_item_id_fkey"; columns: ["item_id"]; isOneToOne: true; referencedRelation: "items"; referencedColumns: ["id"] },
+          { foreignKeyName: "ig_item_links_linked_by_fkey"; columns: ["linked_by"]; isOneToOne: false; referencedRelation: "profiles"; referencedColumns: ["id"] },
+          { foreignKeyName: "ig_item_links_media_id_fkey"; columns: ["media_id"]; isOneToOne: true; referencedRelation: "ig_posts"; referencedColumns: ["media_id"] },
+        ]
       }
       ig_link_candidates: {
         Row: {
@@ -415,12 +459,15 @@ export type Database = {
           interactions: number | null
           likes: number | null
           media_id: string
+          missing_metrics: string[]
           profile_visits: number | null
           reach: number | null
           saved: number | null
           shares: number | null
           snapshot_date: string
           views: number | null
+          source_timestamp: string | null
+          sync_run_id: string | null
         }
         Insert: {
           age_days?: number | null
@@ -430,12 +477,15 @@ export type Database = {
           interactions?: number | null
           likes?: number | null
           media_id: string
+          missing_metrics?: string[]
           profile_visits?: number | null
           reach?: number | null
           saved?: number | null
           shares?: number | null
           snapshot_date: string
           views?: number | null
+          source_timestamp?: string | null
+          sync_run_id?: string | null
         }
         Update: {
           age_days?: number | null
@@ -445,14 +495,24 @@ export type Database = {
           interactions?: number | null
           likes?: number | null
           media_id?: string
+          missing_metrics?: string[]
           profile_visits?: number | null
           reach?: number | null
           saved?: number | null
           shares?: number | null
           snapshot_date?: string
           views?: number | null
+          source_timestamp?: string | null
+          sync_run_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "ig_post_daily_sync_run_id_fkey"
+            columns: ["sync_run_id"]
+            isOneToOne: false
+            referencedRelation: "analytics_sync_runs"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "ig_post_daily_media_id_fkey"
             columns: ["media_id"]
@@ -924,6 +984,57 @@ export type Database = {
         }
         Relationships: []
       }
+      report_context_blocks: {
+        Row: {
+          block_type: string
+          created_at: string
+          created_by: string
+          formula_version: string
+          id: string
+          input_snapshot: Json
+          position: number
+          report_id: string
+          title: string
+        }
+        Insert: {
+          block_type: string
+          created_at?: string
+          created_by: string
+          formula_version: string
+          id?: string
+          input_snapshot: Json
+          position: number
+          report_id: string
+          title: string
+        }
+        Update: {
+          block_type?: string
+          created_at?: string
+          created_by?: string
+          formula_version?: string
+          id?: string
+          input_snapshot?: Json
+          position?: number
+          report_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "report_context_blocks_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "report_context_blocks_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: false
+            referencedRelation: "reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       reports: {
         Row: {
           author_id: string | null
@@ -959,6 +1070,69 @@ export type Database = {
           {
             foreignKeyName: "reports_author_id_fkey"
             columns: ["author_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      weekly_reports: {
+        Row: {
+          byte_size: number
+          content_sha256: string
+          created_at: string
+          id: string
+          original_filename: string
+          period_end: string
+          period_start: string
+          published_at: string | null
+          published_by: string | null
+          storage_path: string
+          title: string
+          updated_at: string
+          uploaded_by: string
+        }
+        Insert: {
+          byte_size: number
+          content_sha256: string
+          created_at?: string
+          id?: string
+          original_filename: string
+          period_end: string
+          period_start: string
+          published_at?: string | null
+          published_by?: string | null
+          storage_path: string
+          title: string
+          updated_at?: string
+          uploaded_by: string
+        }
+        Update: {
+          byte_size?: number
+          content_sha256?: string
+          created_at?: string
+          id?: string
+          original_filename?: string
+          period_end?: string
+          period_start?: string
+          published_at?: string | null
+          published_by?: string | null
+          storage_path?: string
+          title?: string
+          updated_at?: string
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "weekly_reports_published_by_fkey"
+            columns: ["published_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "weekly_reports_uploaded_by_fkey"
+            columns: ["uploaded_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -1085,6 +1259,53 @@ export type Database = {
           },
         ]
       }
+      work_tracker_source_rows: {
+        Row: {
+          id: string
+          source_file_hash: string
+          source_sheet: string
+          source_row: number
+          item_id: string | null
+          publish_date: string | null
+          title: string | null
+          duplicate_key: string | null
+          payload: Json
+          imported_at: string
+        }
+        Insert: {
+          id?: string
+          source_file_hash: string
+          source_sheet: string
+          source_row: number
+          item_id?: string | null
+          publish_date?: string | null
+          title?: string | null
+          duplicate_key?: string | null
+          payload: Json
+          imported_at?: string
+        }
+        Update: {
+          id?: string
+          source_file_hash?: string
+          source_sheet?: string
+          source_row?: number
+          item_id?: string | null
+          publish_date?: string | null
+          title?: string | null
+          duplicate_key?: string | null
+          payload?: Json
+          imported_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "work_tracker_source_rows_item_id_fkey"
+            columns: ["item_id"]
+            isOneToOne: false
+            referencedRelation: "items"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       v_conflict_link_unresolved: {
@@ -1154,6 +1375,8 @@ export type Database = {
       }
       v_item_performance: {
         Row: {
+          age_days: number | null
+          avg_watch_ms: number | null
           color_hex: string | null
           comments: number | null
           follow_rate: number | null
@@ -1161,8 +1384,11 @@ export type Database = {
           id: string | null
           idea_type: string | null
           idea_type_id: number | null
+          interactions: number | null
           likes: number | null
           media_id: string | null
+          media_type: string | null
+          missing_metrics: string[] | null
           permalink: string | null
           product_type: string | null
           profile_visits: number | null
@@ -1175,12 +1401,15 @@ export type Database = {
           shares: number | null
           signal: number | null
           signal_partial: boolean | null
+          snapshot_date: string | null
+          source_timestamp: string | null
           status: Database["public"]["Enums"]["item_status"] | null
           title: string | null
           track_id: number | null
           track_name: string | null
           views: number | null
           visit_rate: number | null
+          engagement_rate: number | null
         }
         Relationships: [
           {
@@ -1202,6 +1431,10 @@ export type Database = {
       v_partner_month: {
         Row: {
           is_thin: boolean | null
+          measured_reach_n: number | null
+          measured_save_rate_n: number | null
+          measured_share_rate_n: number | null
+          measured_signal_n: number | null
           median_reach: number | null
           median_save_rate: number | null
           median_share_rate: number | null
@@ -1216,6 +1449,10 @@ export type Database = {
       v_partner_track: {
         Row: {
           last_collab_at: string | null
+          measured_reach_n: number | null
+          measured_save_rate_n: number | null
+          measured_share_rate_n: number | null
+          measured_signal_n: number | null
           median_reach: number | null
           median_signal: number | null
           n: number | null
@@ -1244,11 +1481,14 @@ export type Database = {
           interactions: number | null
           likes: number | null
           media_id: string | null
+          missing_metrics: string[] | null
           profile_visits: number | null
           reach: number | null
           saved: number | null
           shares: number | null
           snapshot_date: string | null
+          source_timestamp: string | null
+          sync_run_id: string | null
           views: number | null
         }
         Relationships: [
@@ -1258,6 +1498,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "ig_posts"
             referencedColumns: ["media_id"]
+          },
+          {
+            foreignKeyName: "ig_post_daily_sync_run_id_fkey"
+            columns: ["sync_run_id"]
+            isOneToOne: false
+            referencedRelation: "analytics_sync_runs"
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "ig_post_daily_media_id_fkey"
@@ -1314,6 +1561,10 @@ export type Database = {
         Row: {
           color_hex: string | null
           is_thin: boolean | null
+          measured_reach_n: number | null
+          measured_save_rate_n: number | null
+          measured_share_rate_n: number | null
+          measured_signal_n: number | null
           median_reach: number | null
           median_save_rate: number | null
           median_share_rate: number | null
@@ -1357,6 +1608,69 @@ export type Database = {
       }
     }
     Functions: {
+      admin_advanced_analytics_comparison: {
+        Args: { p_request: Json }
+        Returns: Json
+      }
+      admin_add_report_context_block: {
+        Args: { p_report_id: string; p_block_type: string; p_title: string; p_input_snapshot: Json; p_formula_version: string }
+        Returns: Database["public"]["Tables"]["report_context_blocks"]["Row"]
+      }
+      admin_delete_report_context_block: {
+        Args: { p_report_id: string; p_block_id: string }
+        Returns: undefined
+      }
+      admin_reorder_report_context_blocks: {
+        Args: { p_report_id: string; p_order: string[] }
+        Returns: Database["public"]["Tables"]["report_context_blocks"]["Row"][]
+      }
+      admin_analytics_comparison: {
+        Args: {
+          p_start: string
+          p_end: string
+          p_dimension: string
+          p_metric: string
+          p_keys: string[]
+          p_media_type?: string | null
+        }
+        Returns: {
+          dimension_key: string
+          dimension_name: string
+          participant_part: string | null
+          total_n: number
+          measured_n: number
+          median_value: number | null
+          is_thin: boolean
+          has_partial_reels: boolean
+        }[]
+      }
+      admin_analytics_aggregates: {
+        Args: { p_start: string; p_end: string; p_media_type?: string | null }
+        Returns: {
+          dimension: string
+          dimension_key: string
+          dimension_name: string
+          median_reach: number | null
+          median_save_rate: number | null
+          median_share_rate: number | null
+          median_signal: number | null
+          measured_reach_n: number
+          measured_save_rate_n: number
+          measured_share_rate_n: number
+          measured_signal_n: number
+          n: number
+          sample_sufficient: boolean
+        }[]
+      }
+      admin_link_instagram_post: {
+        Args: { p_item_id: string; p_media_id: string; p_reason: string }
+        Returns: Database["public"]["Tables"]["ig_item_links"]["Row"]
+      }
+      canonical_instagram_permalink: { Args: { p_value: string }; Returns: string | null }
+      ingest_analytics_batch: {
+        Args: { p_payload: Json; p_idempotency_key: string; p_signature_timestamp: string; p_source_timestamp: string; p_request_sha256: string }
+        Returns: Json
+      }
       advance_item: {
         Args: {
           p_item: string
@@ -1781,4 +2095,3 @@ export const Constants = {
     },
   },
 } as const
-
