@@ -67,6 +67,11 @@ function loadAppsScript() {
       },
     },
     CacheService: { getScriptCache() { return { remove() {} }; } },
+    LockService: {
+      getScriptLock() {
+        return { waitLock() {}, releaseLock() {} };
+      },
+    },
     SpreadsheetApp: { getActiveSpreadsheet() { return { getSheetByName() { return null; } }; } },
     logRun_(_level: string, message: string) { logs.push(message); },
   });
@@ -96,11 +101,59 @@ function isoDateFrom(base: string, offset: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function memorySheet(headers: string[], initialRows: unknown[][] = []) {
+  const rows = initialRows.map((row) => [...row]);
+  return {
+    rows,
+    getLastRow() { return rows.length + 1; },
+    getDataRange() {
+      return { getValues() { return [[...headers], ...rows.map((row) => [...row])]; } };
+    },
+    getRange(startRow: number, startColumn: number, rowCount: number, columnCount: number) {
+      return {
+        getValues() {
+          return Array.from({ length: rowCount }, (_, rowOffset) =>
+            Array.from({ length: columnCount }, (_, columnOffset) =>
+              rows[startRow - 2 + rowOffset]?.[startColumn - 1 + columnOffset] ?? ""));
+        },
+        setValues(values: unknown[][]) {
+          values.forEach((valueRow, rowOffset) => {
+            const target = startRow - 2 + rowOffset;
+            rows[target] = rows[target] ?? [];
+            valueRow.forEach((value, columnOffset) => {
+              rows[target][startColumn - 1 + columnOffset] = value;
+            });
+          });
+        },
+      };
+    },
+  };
+}
+
+function assertHebronMidnight(epochSeconds: number, expectedDate: string) {
+  const parts = zonedParts(new Date(epochSeconds * 1000), "Asia/Hebron");
+  assert.equal(`${parts.year}-${parts.month}-${parts.day}`, expectedDate);
+  assert.equal(`${parts.hour}:${parts.minute}:${parts.second}`, "00:00:00");
+}
+
 test("account collection closes the Hebron calendar two days before now", () => {
   const { context } = loadAppsScript();
   assert.equal(context.ACCOUNT_FINALIZATION_LAG_DAYS, 2);
   assert.equal(context.analyticsClosedAccountDate_(new Date("2026-09-24T21:30:00Z")), "2026-09-23");
   assert.equal(context.fmt_(new Date("2026-09-24T21:30:00Z")), "2026-09-25");
+});
+
+test("account day bounds are Hebron midnights in both 2026 DST offset regimes", () => {
+  const { context } = loadAppsScript();
+  const winter = context.analyticsAccountDayBounds_("2026-01-15");
+  const summer = context.analyticsAccountDayBounds_("2026-07-15");
+
+  assertHebronMidnight(winter.since, "2026-01-15");
+  assertHebronMidnight(winter.until, "2026-01-16");
+  assertHebronMidnight(summer.since, "2026-07-15");
+  assertHebronMidnight(summer.until, "2026-07-16");
+  assert.notEqual(formatDate(new Date(winter.since * 1000), "Asia/Hebron", "Z"),
+    formatDate(new Date(summer.since * 1000), "Asia/Hebron", "Z"));
 });
 
 test("the versioned Code source retains the Portal web entry point", () => {
@@ -153,6 +206,91 @@ test("account collection uses explicit day bounds and never overwrites an existi
   assert.equal(appendCalls, 1);
   assert.ok(insightParams.length >= 4);
   assert.ok(insightParams.every((params) => Number.isInteger(params.since) && Number.isInteger(params.until) && Number(params.until) > Number(params.since)));
+});
+
+test("post collection retry reuses the stored same-day snapshot without recollecting", () => {
+  const { context } = loadAppsScript();
+  const posts = memorySheet(
+    ["post_id", "published_at", "media_type", "product_type", "permalink", "caption"],
+    [["post-1", "2026-09-20T18:00:00Z", "VIDEO", "REELS", "https://www.instagram.com/reel/abc/", "caption"]],
+  );
+  const daily = memorySheet(
+    ["snapshot_date", "post_id", "age_days", "likes", "comments", "reach", "views", "saved", "shares", "interactions", "profile_visits", "follows", "avg_watch_ms"],
+  );
+  const spreadsheet = {
+    getSheetByName(name: string) { return name === "posts" ? posts : daily; },
+  };
+  context.igGet_ = () => ({ data: [{ id: "post-1", timestamp: "2026-09-20T18:00:00Z" }] });
+  let snapshotCalls = 0;
+  let reach = 10;
+  context.snapRow_ = () => {
+    snapshotCalls += 1;
+    return ["2026-09-25", "post-1", 5, 1, 1, reach, 20, 1, 1, 2, "", "", ""];
+  };
+
+  context.pullPosts_(spreadsheet, "2026-09-25");
+  reach = 99;
+  context.pullPosts_(spreadsheet, "2026-09-25");
+
+  assert.equal(snapshotCalls, 1);
+  assert.equal(daily.rows.length, 1);
+  assert.equal(daily.rows[0][5], 10);
+});
+
+test("complete same-day demographics are synchronized without recollection", () => {
+  const { context } = loadAppsScript();
+  const demographics = memorySheet(
+    ["snapshot_date", "dimension", "key", "value"],
+    [
+      ["2026-09-25", "country", "PS", 100],
+      ["2026-09-25", "city", "Jerusalem", 80],
+      ["2026-09-25", "age", "25-34", 70],
+      ["2026-09-25", "gender", "F", 60],
+    ],
+  );
+  const spreadsheet = { getSheetByName() { return demographics; } };
+  context.fmt_ = () => "2026-09-25";
+  context.SpreadsheetApp = { getActiveSpreadsheet() { return spreadsheet; } };
+  context.logRun_ = () => {};
+  context.igGet_ = () => { throw new Error("must not recollect an immutable same-day snapshot"); };
+  const synced: string[] = [];
+  context.syncAnalyticsStream_ = (stream: string) => { synced.push(stream); return { received: 4 }; };
+
+  const result = context.pullDemographics();
+
+  assert.deepEqual(synced, ["demographics"]);
+  assert.equal(result.count, 4);
+  assert.equal(demographics.rows.length, 4);
+});
+
+test("demographic collection refuses partial same-day data and writes no partial snapshot", () => {
+  const { context } = loadAppsScript();
+  const demographics = memorySheet(["snapshot_date", "dimension", "key", "value"]);
+  const spreadsheet = { getSheetByName() { return demographics; } };
+  context.fmt_ = () => "2026-09-25";
+  context.igGet_ = (_path: string, params: { breakdown: string }) => {
+    const results = params.breakdown === "age"
+      ? []
+      : [{ dimension_values: [params.breakdown + "-value"], value: 1 }];
+    return { data: [{ total_value: { breakdowns: [{ results }] } }] };
+  };
+
+  assert.throws(() => context.collectDemographics_(spreadsheet), /DEMOGRAPHICS_INCOMPLETE/);
+  assert.equal(demographics.rows.length, 0);
+});
+
+test("an incomplete stored demographic date is never extended into a second snapshot", () => {
+  const { context } = loadAppsScript();
+  const demographics = memorySheet(
+    ["snapshot_date", "dimension", "key", "value"],
+    [["2026-09-25", "country", "PS", 100]],
+  );
+  const spreadsheet = { getSheetByName() { return demographics; } };
+  context.fmt_ = () => "2026-09-25";
+  context.igGet_ = () => { throw new Error("must not recollect over a partial stored date"); };
+
+  assert.throws(() => context.collectDemographics_(spreadsheet), /DEMOGRAPHICS_STORED_SNAPSHOT_INCOMPLETE/);
+  assert.equal(demographics.rows.length, 1);
 });
 
 test("account watermark advances after each accepted chunk and not past a failed chunk", () => {

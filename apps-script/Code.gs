@@ -18,6 +18,7 @@ var WINDOW_DAYS = 35;
 var MIN_POSTS = 12;
 var BATCH_CAP = 110;
 var COLLAB_WIN = 7;
+var DEMOGRAPHIC_DIMENSIONS = ["country", "city", "age", "gender"];
 
 var M_REEL = ["views", "reach", "likes", "comments", "saved", "shares", "total_interactions",
               "ig_reels_avg_watch_time", "ig_reels_video_view_total_time"];
@@ -159,6 +160,23 @@ function analyticsRunStream_(stream, date, work) {
   }
 }
 
+function analyticsWithScriptLock_(work) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try { return work(); }
+  finally { lock.releaseLock(); }
+}
+
+function analyticsPostSnapshotKeys_(sheet) {
+  var keys = {};
+  readSheet_(sheet).forEach(function (row) {
+    var date = String(row.snapshot_date || "").slice(0, 10);
+    var postId = String(row.post_id || "").trim();
+    if (date && postId) keys[date + "|" + postId] = true;
+  });
+  return keys;
+}
+
 function dailyPull() {
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   var now = new Date();
@@ -221,23 +239,35 @@ function accountViews_(bounds) {
 }
 
 function pullPosts_(spreadsheet, today) {
-  var postsSheet = spreadsheet.getSheetByName(SHEETS.posts);
-  var dailySheet = spreadsheet.getSheetByName(SHEETS.daily);
-  var media = igGet_("/me/media", { fields: mediaFields_(), limit: 50 });
-  if (media.error) throw new Error("POST_COLLECTION_FAILED");
-  var known = colValues_(postsSheet, 1).map(String);
-  var now = new Date();
-  var newRows = [];
-  var snapshots = [];
-  (media.data || []).forEach(function (item, index) {
-    var age = Math.floor((now - new Date(item.timestamp)) / 86400000);
-    if (age > WINDOW_DAYS && index >= MIN_POSTS) return;
-    if (known.indexOf(String(item.id)) === -1) newRows.push(postRow_(item));
-    snapshots.push(snapRow_(item, today, age));
-    Utilities.sleep(120);
+  return analyticsWithScriptLock_(function () {
+    var postsSheet = spreadsheet.getSheetByName(SHEETS.posts);
+    var dailySheet = spreadsheet.getSheetByName(SHEETS.daily);
+    var media = igGet_("/me/media", { fields: mediaFields_(), limit: 50 });
+    if (media.error) throw new Error("POST_COLLECTION_FAILED");
+    var known = {};
+    colValues_(postsSheet, 1).forEach(function (value) { known[String(value)] = true; });
+    var snapshotKeys = analyticsPostSnapshotKeys_(dailySheet);
+    var now = new Date();
+    var newRows = [];
+    var snapshots = [];
+    (media.data || []).forEach(function (item, index) {
+      var postId = String(item.id);
+      var age = Math.floor((now - new Date(item.timestamp)) / 86400000);
+      if (age > WINDOW_DAYS && index >= MIN_POSTS) return;
+      if (!known[postId]) {
+        newRows.push(postRow_(item));
+        known[postId] = true;
+      }
+      var snapshotKey = today + "|" + postId;
+      if (snapshotKeys[snapshotKey]) return;
+      snapshots.push(snapRow_(item, today, age));
+      snapshotKeys[snapshotKey] = true;
+      Utilities.sleep(120);
+    });
+    if (newRows.length) postsSheet.getRange(postsSheet.getLastRow() + 1, 1, newRows.length, 6).setValues(newRows);
+    if (snapshots.length) dailySheet.getRange(dailySheet.getLastRow() + 1, 1, snapshots.length, 13).setValues(snapshots);
+    return { posts: newRows.length, snapshots: snapshots.length };
   });
-  if (newRows.length) postsSheet.getRange(postsSheet.getLastRow() + 1, 1, newRows.length, 6).setValues(newRows);
-  if (snapshots.length) dailySheet.getRange(dailySheet.getLastRow() + 1, 1, snapshots.length, 13).setValues(snapshots);
 }
 
 function backfillPosts() {
@@ -276,25 +306,38 @@ function backfillPosts() {
 }
 
 function collectDemographics_(spreadsheet) {
-  var sheet = spreadsheet.getSheetByName(SHEETS.demo);
-  var today = fmt_(new Date());
-  var rows = [];
-  ["country", "city", "age", "gender"].forEach(function (dimension) {
-    var response = igGet_("/me/insights", {
-      metric: "follower_demographics", period: "lifetime", metric_type: "total_value",
-      breakdown: dimension, timeframe: "this_month"
+  return analyticsWithScriptLock_(function () {
+    var sheet = spreadsheet.getSheetByName(SHEETS.demo);
+    var today = fmt_(new Date());
+    var stored = readSheet_(sheet).filter(function (row) {
+      return String(row.snapshot_date || "").slice(0, 10) === today;
     });
-    if (response.error) throw new Error("DEMOGRAPHICS_COLLECTION_FAILED");
-    var breakdowns = response.data && response.data[0] && response.data[0].total_value && response.data[0].total_value.breakdowns;
-    var results = breakdowns && breakdowns[0] ? breakdowns[0].results || [] : [];
-    results.forEach(function (result) {
-      rows.push([today, dimension, String(result.dimension_values[0]), metricValue_(result.value)]);
+    if (stored.length) {
+      var storedDimensions = {};
+      stored.forEach(function (row) { storedDimensions[String(row.dimension || "")] = true; });
+      var storedComplete = DEMOGRAPHIC_DIMENSIONS.every(function (dimension) { return storedDimensions[dimension]; });
+      if (!storedComplete) throw new Error("DEMOGRAPHICS_STORED_SNAPSHOT_INCOMPLETE");
+      return stored.length;
+    }
+
+    var rows = [];
+    DEMOGRAPHIC_DIMENSIONS.forEach(function (dimension) {
+      var response = igGet_("/me/insights", {
+        metric: "follower_demographics", period: "lifetime", metric_type: "total_value",
+        breakdown: dimension, timeframe: "this_month"
+      });
+      if (response.error) throw new Error("DEMOGRAPHICS_COLLECTION_FAILED");
+      var breakdowns = response.data && response.data[0] && response.data[0].total_value && response.data[0].total_value.breakdowns;
+      var results = breakdowns && breakdowns[0] ? breakdowns[0].results || [] : [];
+      if (!results.length) throw new Error("DEMOGRAPHICS_INCOMPLETE");
+      results.forEach(function (result) {
+        rows.push([today, dimension, String(result.dimension_values[0]), metricValue_(result.value)]);
+      });
+      Utilities.sleep(300);
     });
-    Utilities.sleep(300);
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
+    return rows.length;
   });
-  if (!rows.length) throw new Error("DEMOGRAPHICS_EMPTY");
-  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
-  return rows.length;
 }
 
 function pullDemographics() {

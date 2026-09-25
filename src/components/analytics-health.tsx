@@ -60,7 +60,7 @@ export function AnalyticsHealth() {
       {freshness ? <div className="admin-sync-summary">
         {([
           ["المنشورات", freshness.posts],
-          ["الحساب", freshness.account],
+          ["مقاييس الحساب اليومية", freshness.account],
           ["الجمهور", freshness.audience],
         ] as const).map(([label, stream]) => <div key={label}>
           <span className="muted">{label}</span>
@@ -68,6 +68,7 @@ export function AnalyticsHealth() {
           <span className="num muted">{stream.latestDate ?? "—"}</span>
         </div>)}
       </div> : null}
+      {freshness ? <p className="muted">رصيد المتابعين وعدد المواد غير متاحين ضمن هذا القياس، ولا تُنسب قراءة حالية إلى يوم تاريخي.</p> : null}
       {latestAccepted ? <div className="admin-sync-summary"><div><span className="muted">آخر طلب مزامنة مقبول</span><strong className="num">{formatHebronDateTime(latestAccepted.source_timestamp)}</strong></div><div><span className="muted">وقت الاستلام</span><strong className="num">{formatHebronDateTime(latestAccepted.received_at)}</strong></div></div> : latest ? <p className="muted">لا توجد مزامنة ناجحة مسجلة بعد.</p> : null}
       {state.kind === "ready" && state.runs.length ? <details><summary>سجل المزامنة</summary><div className="table-wrap"><table><thead><tr><th>وقت المصدر</th><th>الحالة</th><th>المستلم</th><th>الجديد</th><th>المحدّث</th><th>الموجود</th><th>المرفوض</th></tr></thead><tbody>{state.runs.map((run) => <tr key={run.id}><td className="num">{formatHebronDateTime(run.source_timestamp)}</td><td>{run.status === "accepted" ? "مقبولة" : "قيد المعالجة"}</td><td className="num">{run.received_count.toLocaleString("en-US")}</td><td className="num">{run.inserted_count.toLocaleString("en-US")}</td><td className="num">{run.updated_count.toLocaleString("en-US")}</td><td className="num">{run.already_present_identical_count.toLocaleString("en-US")}</td><td className="num">{run.rejected_count.toLocaleString("en-US")}</td></tr>)}</tbody></table></div></details> : null}
     </section>

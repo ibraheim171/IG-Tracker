@@ -32,4 +32,6 @@ test("analytics health reads the latest stored date for each stream instead of i
   for (const label of ["المنشورات", "الحساب", "الجمهور", "حديثة", "متأخرة", "لم تُجمع", "غير مستحقة بعد"]) {
     assert.match(health, new RegExp(label));
   }
+  assert.match(health, /مقاييس الحساب اليومية/);
+  assert.match(health, /رصيد المتابعين وعدد المواد غير متاحين ضمن هذا القياس/);
 });
