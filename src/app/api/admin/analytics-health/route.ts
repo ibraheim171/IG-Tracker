@@ -25,11 +25,25 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) return withCookies({ error: auth.error.message, code: auth.error.code }, auth.error.status, sessionResponse);
   let service;
   try { service = analyticsServiceClient(); } catch { return withCookies({ error: "خدمة التحليلات غير مهيأة في هذه البيئة.", code: "E_SERVER_CONFIG" }, 503, sessionResponse); }
-  const { data, error } = await service
-    .from("analytics_sync_runs")
-    .select("id,source_timestamp,received_at,status,received_count,inserted_count,updated_count,already_present_identical_count,rejected_count")
-    .order("received_at", { ascending: false })
-    .limit(20);
-  if (error) return withCookies({ error: "تعذر تحميل سجل المزامنة.", code: "E_ANALYTICS_HEALTH" }, 503, sessionResponse);
-  return withCookies({ runs: data ?? [] }, 200, sessionResponse);
+  const [runs, posts, account, audience] = await Promise.all([
+    service
+      .from("analytics_sync_runs")
+      .select("id,source_timestamp,received_at,status,received_count,inserted_count,updated_count,already_present_identical_count,rejected_count")
+      .order("received_at", { ascending: false })
+      .limit(20),
+    service.from("ig_post_daily").select("snapshot_date").order("snapshot_date", { ascending: false }).limit(1),
+    service.from("ig_account_daily").select("date").order("date", { ascending: false }).limit(1),
+    service.from("ig_demographics").select("snapshot_date").order("snapshot_date", { ascending: false }).limit(1),
+  ]);
+  if (runs.error || posts.error || account.error || audience.error) {
+    return withCookies({ error: "تعذر تحميل حالة تغطية التحليلات.", code: "E_ANALYTICS_HEALTH" }, 503, sessionResponse);
+  }
+  return withCookies({
+    runs: runs.data ?? [],
+    streams: {
+      posts: posts.data?.[0]?.snapshot_date ?? null,
+      account: account.data?.[0]?.date ?? null,
+      audience: audience.data?.[0]?.snapshot_date ?? null,
+    },
+  }, 200, sessionResponse);
 }

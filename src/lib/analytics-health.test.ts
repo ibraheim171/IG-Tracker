@@ -19,3 +19,17 @@ test("analytics health has no link deletion or media-id clearing path", () => {
   assert.doesNotMatch(route, /\.delete\s*\(/);
   assert.doesNotMatch(route, /ig_media_id\s*:\s*null/);
 });
+
+test("analytics health reads the latest stored date for each stream instead of inferring coverage from sync runs", () => {
+  const route = readFileSync(new URL("../app/api/admin/analytics-health/route.ts", import.meta.url), "utf8");
+  const health = readFileSync(new URL("../components/analytics-health.tsx", import.meta.url), "utf8");
+
+  assert.match(route, /from\("ig_post_daily"\)[\s\S]+order\("snapshot_date"/);
+  assert.match(route, /from\("ig_account_daily"\)[\s\S]+order\("date"/);
+  assert.match(route, /from\("ig_demographics"\)[\s\S]+order\("snapshot_date"/);
+  assert.match(route, /streams/);
+  assert.match(health, /summarizeAnalyticsFreshness/);
+  for (const label of ["المنشورات", "الحساب", "الجمهور", "حديثة", "متأخرة", "لم تُجمع", "غير مستحقة بعد"]) {
+    assert.match(health, new RegExp(label));
+  }
+});
