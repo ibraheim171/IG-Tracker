@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAnalyticsAdmin } from "@/lib/analytics-auth";
 import { analyticsServiceClient } from "@/lib/analytics-server";
-import { completeAccountDailyRange } from "@/lib/account-pulse";
+import { accountStockChanges, completeAccountDailyRange } from "@/lib/account-pulse";
 import {
   insightUtcBounds,
-  normalizeAccountDaily,
-  summarizeAccountRange,
+  summarizeAccountFlows,
   validateInsightRange,
-  type AccountDailyInsight,
+  type AccountFlowDailyInsight,
+  type AccountStockObservation,
 } from "@/lib/insights";
 
 function withCookies(body: object, status: number, source: NextResponse) {
@@ -40,13 +40,19 @@ export async function GET(request: NextRequest) {
   }
 
   const bounds = insightUtcBounds(validation.range);
-  const [dailyResult, publishedResult, slotsResult] = await Promise.all([
+  const [dailyResult, stockResult, publishedResult, slotsResult] = await Promise.all([
     service
       .from("ig_account_daily")
-      .select("date,followers,media_count,reach,views,reach_followers,reach_non_followers,follows,unfollows,missing_metrics,source_timestamp")
+      .select("date,reach,views,reach_followers,reach_non_followers,follows,unfollows,missing_metrics,source_timestamp")
       .gte("date", validation.range.start)
       .lte("date", validation.range.end)
       .order("date", { ascending: true }),
+    service
+      .from("ig_account_stock_observations")
+      .select("observation_key,observed_at,source,followers_count,media_count,missing_metrics,source_timestamp")
+      .gte("observed_at", bounds.start)
+      .lt("observed_at", bounds.endExclusive)
+      .order("observed_at", { ascending: true }),
     auth.supabase
       .from("items")
       .select("id", { count: "exact", head: true })
@@ -60,18 +66,21 @@ export async function GET(request: NextRequest) {
       .gte("slot_at", bounds.start)
       .lt("slot_at", bounds.endExclusive),
   ]);
-  if (dailyResult.error || publishedResult.error || slotsResult.error) {
+  if (dailyResult.error || stockResult.error || publishedResult.error || slotsResult.error) {
     return withCookies({ error: "تعذر تحميل نبض الحساب. حاول مرة أخرى.", code: "E_ACCOUNT_INSIGHTS" }, 503, sessionResponse);
   }
 
   const daily = completeAccountDailyRange(
     validation.range,
-    ((dailyResult.data ?? []) as AccountDailyInsight[]).map(normalizeAccountDaily),
+    (dailyResult.data ?? []) as AccountFlowDailyInsight[],
   );
+  const stock = (stockResult.data ?? []) as AccountStockObservation[];
   return withCookies({
     range: validation.range,
     daily,
-    summary: summarizeAccountRange(validation.range, daily),
+    summary: summarizeAccountFlows(validation.range, daily),
+    stock,
+    stock_changes: accountStockChanges(stock),
     publishing: { published: publishedResult.count, slots: slotsResult.count },
   }, 200, sessionResponse);
 }

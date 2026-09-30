@@ -4,6 +4,7 @@ export type AnalyticsStreamDates = {
   posts: string | null;
   account: string | null;
   audience: string | null;
+  accountStock: string | null;
 };
 
 export type AnalyticsFreshnessStatus = "fresh" | "stale" | "never_collected" | "not_due";
@@ -52,10 +53,12 @@ function weeklyFreshness(latestDate: string | null, today: string): StreamFreshn
 
 export function summarizeAnalyticsFreshness(latest: AnalyticsStreamDates, now: string) {
   const today = hebronDate(now);
+  const stockDate = latest.accountStock ? hebronDate(latest.accountStock) : null;
   return {
     posts: dailyFreshness(latest.posts, today),
     account: dailyFreshness(latest.account, shiftDate(today, -2)),
     audience: weeklyFreshness(latest.audience, today),
+    accountStock: dailyFreshness(stockDate, today),
   };
 }
 

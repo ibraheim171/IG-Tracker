@@ -70,6 +70,16 @@ export type PerformanceAggregate = {
   sample_sufficient: boolean;
 };
 export type AccountDailyInsight = { date: string; followers: number | null; media_count: number | null; reach: number | null; views: number | null; reach_followers: number | null; reach_non_followers: number | null; follows: number | null; unfollows: number | null; missing_metrics: string[]; source_timestamp?: string | null };
+export type AccountFlowDailyInsight = Omit<AccountDailyInsight, "followers" | "media_count">;
+export type AccountStockObservation = {
+  observation_key: string;
+  observed_at: string;
+  source: "instagram_profile";
+  followers_count: number | null;
+  media_count: number | null;
+  missing_metrics: string[];
+  source_timestamp: string;
+};
 export type AccountRangeMetric = { daily_sum: number | null; measured_days: number; expected_days: number };
 export type AccountRangeFollowerSummary = {
   boundary_start: number | null;
@@ -84,6 +94,7 @@ export type AccountRangeFollowerSummary = {
   expected_days: number;
 };
 export type AccountRangeSummary = { followers: AccountRangeFollowerSummary; reach: AccountRangeMetric; views: AccountRangeMetric; follows: AccountRangeMetric; unfollows: AccountRangeMetric };
+export type AccountFlowSummary = Omit<AccountRangeSummary, "followers">;
 export type DemographicInsight = { snapshot_date: string; dimension: string; key: string; value: number | null; source_timestamp?: string | null };
 export type CollabInsight = { collaboration_date: string; partner: string; collaboration_type: string | null; follows_lift: number | null; reach_lift_pct: number | null; nonfollower_lift_pct: number | null };
 export type SyncRunInsight = {
@@ -217,6 +228,16 @@ export function summarizeAccountRange(range: InsightRange, rows: AccountDailyIns
     measured_days: followers.length,
     expected_days: expectedDays,
   }, reach: metric("reach"), views: metric("views"), follows: metric("follows"), unfollows: metric("unfollows") };
+}
+
+export function summarizeAccountFlows(range: InsightRange, rows: AccountFlowDailyInsight[]): AccountFlowSummary {
+  const expectedDays = Math.floor((Date.parse(`${range.end}T00:00:00Z`) - Date.parse(`${range.start}T00:00:00Z`)) / 86400000) + 1;
+  const ordered = [...rows].filter((row) => row.date >= range.start && row.date <= range.end);
+  const metric = (field: "reach" | "views" | "follows" | "unfollows"): AccountRangeMetric => {
+    const values = ordered.map((row) => row[field]).filter((value): value is number => value !== null);
+    return { daily_sum: values.length ? values.reduce((sum, value) => sum + value, 0) : null, measured_days: values.length, expected_days: expectedDays };
+  };
+  return { reach: metric("reach"), views: metric("views"), follows: metric("follows"), unfollows: metric("unfollows") };
 }
 
 function dateInTimeZone(date: Date, timeZone: string) {

@@ -15,11 +15,13 @@ test("account and audience routes are same-origin, admin-only, and never cached"
 
 test("account route preserves missing measurements and complete-range summaries", () => {
   const source = read("../app/api/insights/account/route.ts");
-  assert.match(source, /normalizeAccountDaily/);
   assert.match(source, /completeAccountDailyRange/);
-  assert.match(source, /summarizeAccountRange/);
+  assert.match(source, /summarizeAccountFlows/);
   assert.match(source, /validateInsightRange/);
   assert.doesNotMatch(source, /reach_non_followers\s*\/\s*reach/);
+  assert.match(source, /from\("ig_account_stock_observations"\)/);
+  assert.match(source, /stock/);
+  assert.doesNotMatch(source, /select\("date,followers,media_count/);
 });
 
 test("audience route selects one latest snapshot before ranking it", () => {
@@ -41,7 +43,7 @@ test("analytics shell is factual and excludes operational link review", () => {
 test("account pulse exposes coverage and Meta limitations beside the charts", () => {
   const pulse = read("../components/insights/account-pulse.tsx");
   const chart = read("../components/insights/metric-line-chart.tsx");
-  assert.match(pulse, /التغير بين حدّي الفترة/);
+  assert.match(pulse, /التغير بين الرصدين/);
   assert.match(pulse, /وصول غير المتابعين/);
   assert.match(pulse, /Meta لا يزوّدنا حاليًا بعدد إلغاءات المتابعة/);
   assert.match(chart, /lineSegments/);

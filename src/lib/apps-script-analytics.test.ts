@@ -54,7 +54,7 @@ function loadAppsScript() {
       sleep() {},
       Charset: { UTF_8: "UTF_8" },
       DigestAlgorithm: { SHA_256: "SHA_256" },
-      computeDigest() { return [0]; },
+      computeDigest() { return Array.from({ length: 32 }, () => 0); },
       computeHmacSha256Signature() { return [0]; },
     },
     Session: { getScriptTimeZone() { throw new Error("Session timezone must not be used"); } },
@@ -313,12 +313,13 @@ test("daily streams remain isolated and report failure only after the other stre
   const { context } = loadAppsScript();
   const calls: string[] = [];
   context.pullPosts_ = () => { calls.push("posts_collect"); };
+  context.syncAccountStockAnalytics_ = () => { calls.push("account_stock"); throw new Error("stock rejected"); };
   context.syncAnalyticsStream_ = (stream: string) => { calls.push(stream); return { received: 1 }; };
   context.syncAccountAnalytics_ = () => { calls.push("account"); throw new Error("account rejected"); };
   context.CacheService = { getScriptCache() { return { remove() {} }; } };
 
   assert.throws(() => context.dailyPull(), /ANALYTICS_STREAM_FAILURE/);
-  assert.deepEqual(calls, ["posts_collect", "posts", "account", "collabs"]);
+  assert.deepEqual(calls, ["posts_collect", "posts", "account_stock", "account", "collabs"]);
 });
 
 test("weekly demographics collection synchronizes its own stream", () => {
@@ -336,4 +337,90 @@ test("every analytics chunk stays at or below 500 rows", () => {
   const { context } = loadAppsScript();
   const chunks = context.analyticsChunk_(Array.from({ length: 1001 }, (_, index) => index), context.ANALYTICS_MAX_ROWS);
   assert.deepEqual(Array.from(chunks, (chunk: unknown[]) => chunk.length), [500, 500, 1]);
+});
+
+test("account stock collection stores a real observed timestamp and preserves missing as null", () => {
+  const { context } = loadAppsScript();
+  const stock = memorySheet(["observation_key", "observed_at", "source", "followers_count", "media_count", "missing_metrics"]);
+  const spreadsheet = { getSheetByName() { return stock; } };
+  context.igGet_ = (path: string, params: Record<string, unknown>) => {
+    assert.equal(path, "/me");
+    assert.equal(params.fields, "followers_count,media_count");
+    return { followers_count: 321 };
+  };
+  const before = Date.now();
+  const result = context.collectAccountStock_(spreadsheet);
+  const after = Date.now();
+
+  assert.equal(result.status, "inserted");
+  assert.equal(stock.rows.length, 1);
+  assert.match(String(stock.rows[0][0]), /^gas\.account_stock\.[0-9a-f]{64}$/);
+  assert.ok(Date.parse(String(stock.rows[0][1])) >= before && Date.parse(String(stock.rows[0][1])) <= after);
+  assert.equal(stock.rows[0][2], "instagram_profile");
+  assert.equal(stock.rows[0][3], 321);
+  assert.equal(stock.rows[0][4], "");
+  assert.equal(stock.rows[0][5], "media_count");
+  const parsed = context.analyticsReadAccountStock_(spreadsheet);
+  assert.equal(parsed[0].followers_count, 321);
+  assert.equal(parsed[0].media_count, null);
+  assert.deepEqual(Array.from(parsed[0].missing_metrics), ["media_count"]);
+});
+
+test("account stock retry resends the complete stored observation without recollecting Meta", () => {
+  const { context } = loadAppsScript();
+  const stock = memorySheet(
+    ["observation_key", "observed_at", "source", "followers_count", "media_count", "missing_metrics"],
+    [["gas.account_stock.saved", "2026-09-25T03:00:00.000Z", "instagram_profile", 300, 180, ""]],
+  );
+  const spreadsheet = { getSheetByName() { return stock; } };
+  context.fmt_ = () => "2026-09-25";
+  context.igGet_ = () => { throw new Error("must not recollect a stored observation"); };
+  const sent: unknown[][] = [];
+  context.analyticsSendBatch_ = (batch: { account_stock: unknown[] }) => {
+    sent.push(batch.account_stock);
+    return { ok: true, received_count: batch.account_stock.length, inserted_count: 1, updated_count: 0, already_present_identical_count: 0, rejected_count: 0 };
+  };
+
+  const result = context.syncAccountStockAnalytics_(spreadsheet, new Date("2026-09-25T12:00:00Z"));
+
+  assert.equal(stock.rows.length, 1);
+  assert.equal(result.received, 1);
+  assert.equal(sent.length, 1);
+  assert.equal((sent[0][0] as { observation_key: string }).observation_key, "gas.account_stock.saved");
+});
+
+test("account stock rejects a partial stored row instead of extending it", () => {
+  const { context } = loadAppsScript();
+  const stock = memorySheet(
+    ["observation_key", "observed_at", "source", "followers_count", "media_count", "missing_metrics"],
+    [["gas.account_stock.partial", "2026-09-25T03:00:00.000Z", "instagram_profile", 300, "", ""]],
+  );
+  const spreadsheet = { getSheetByName() { return stock; } };
+  context.fmt_ = () => "2026-09-25";
+  context.igGet_ = () => { throw new Error("must not fetch over partial storage"); };
+
+  assert.throws(() => context.collectAccountStock_(spreadsheet), /ACCOUNT_STOCK_STORED_ROW_INCOMPLETE/);
+  assert.equal(stock.rows.length, 1);
+});
+
+test("account stock stream advances only accepted chunks and keeps every request within 500 rows", () => {
+  const { context, properties } = loadAppsScript();
+  const rows = Array.from({ length: 501 }, (_, index) => ({
+    observation_key: `gas.account_stock.${String(index).padStart(64, "0")}`,
+    observed_at: new Date(Date.UTC(2025, 0, 1, 0, index)).toISOString(),
+    source: "instagram_profile",
+    followers_count: 100 + index,
+    media_count: 20,
+    missing_metrics: [],
+  }));
+  const sizes: number[] = [];
+  context.analyticsSendBatch_ = (batch: { account_stock: unknown[] }) => {
+    sizes.push(batch.account_stock.length);
+    if (sizes.length === 2) throw new Error("stock chunk rejected");
+    return { ok: true, received_count: batch.account_stock.length, inserted_count: batch.account_stock.length, updated_count: 0, already_present_identical_count: 0, rejected_count: 0 };
+  };
+
+  assert.throws(() => context.analyticsSyncAccountStockRows_(rows), /stock chunk rejected/);
+  assert.deepEqual(sizes, [500, 1]);
+  assert.equal(properties.get("ANALYTICS_ACCOUNT_STOCK_SENT_THROUGH"), rows[499].observed_at);
 });

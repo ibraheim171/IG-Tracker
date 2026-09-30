@@ -1,4 +1,4 @@
-import type { AccountDailyInsight, DemographicInsight, InsightRange } from "./insights.ts";
+import type { AccountDailyInsight, AccountFlowDailyInsight, AccountStockObservation, DemographicInsight, InsightRange } from "./insights.ts";
 
 export type ChartPoint<X extends string | number = string | number> = { x: X; y: number | null };
 export type MeasuredChartPoint<X extends string | number = string | number> = { x: X; y: number };
@@ -61,17 +61,41 @@ export function followerDailyChanges(rows: Array<Pick<AccountDailyInsight, "date
   }));
 }
 
-export function completeAccountDailyRange(range: InsightRange, rows: AccountDailyInsight[]): AccountDailyInsight[] {
+export type AccountStockChange = Pick<AccountStockObservation, "observation_key" | "observed_at" | "followers_count" | "media_count"> & {
+  follower_change: number | null;
+  media_count_change: number | null;
+};
+
+export function accountStockChanges(rows: AccountStockObservation[]): AccountStockChange[] {
+  const ordered = [...rows].sort((left, right) => left.observed_at.localeCompare(right.observed_at));
+  let previousFollowers: number | null = null;
+  let previousMedia: number | null = null;
+  return ordered.map((row) => {
+    const result = {
+      observation_key: row.observation_key,
+      observed_at: row.observed_at,
+      followers_count: row.followers_count,
+      media_count: row.media_count,
+      follower_change: previousFollowers !== null && row.followers_count !== null
+        ? row.followers_count - previousFollowers : null,
+      media_count_change: previousMedia !== null && row.media_count !== null
+        ? row.media_count - previousMedia : null,
+    };
+    if (row.followers_count !== null) previousFollowers = row.followers_count;
+    if (row.media_count !== null) previousMedia = row.media_count;
+    return result;
+  });
+}
+
+export function completeAccountDailyRange(range: InsightRange, rows: AccountFlowDailyInsight[]): AccountFlowDailyInsight[] {
   const byDate = new Map(rows.map((row) => [row.date, row]));
   const cursor = new Date(`${range.start}T00:00:00Z`);
   const end = new Date(`${range.end}T00:00:00Z`);
-  const complete: AccountDailyInsight[] = [];
+  const complete: AccountFlowDailyInsight[] = [];
   while (cursor <= end) {
     const date = cursor.toISOString().slice(0, 10);
     complete.push(byDate.get(date) ?? {
       date,
-      followers: null,
-      media_count: null,
       reach: null,
       views: null,
       reach_followers: null,

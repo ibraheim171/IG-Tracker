@@ -3,16 +3,18 @@
 import { useEffect, useState } from "react";
 import { DataCoverage } from "./data-coverage";
 import { MetricLineChart } from "./metric-line-chart";
-import type { AccountDailyInsight, AccountRangeMetric, AccountRangeSummary, InsightRange } from "@/lib/insights";
+import type { AccountFlowDailyInsight, AccountFlowSummary, AccountRangeMetric, AccountStockObservation, InsightRange } from "@/lib/insights";
 import { reportMetricFormulas, type ValidReportContextBlock } from "@/lib/report-context";
 import { AddToReportButton } from "./add-to-report-button";
-import { followerDailyChanges } from "@/lib/account-pulse";
+import type { AccountStockChange } from "@/lib/account-pulse";
 import { MetricDefinitions } from "./metric-definitions";
 
 type AccountPayload = {
   range: InsightRange;
-  daily: AccountDailyInsight[];
-  summary: AccountRangeSummary;
+  daily: AccountFlowDailyInsight[];
+  summary: AccountFlowSummary;
+  stock: AccountStockObservation[];
+  stock_changes: AccountStockChange[];
   publishing: { published: number | null; slots: number | null };
 };
 
@@ -57,12 +59,20 @@ export function AccountPulse({ range }: { range: InsightRange }) {
   if (state.kind === "loading") return <section className="card"><p aria-live="polite">جارٍ تحميل نبض الحساب…</p></section>;
   if (state.kind === "error") return <section className="card stack" role="alert"><p className="error">{state.message}</p><button className="button button-secondary" type="button" onClick={() => setRetry((value) => value + 1)}>إعادة المحاولة</button></section>;
 
-  const { daily, summary, publishing } = state.payload;
+  const { daily, summary, stock, stock_changes: stockChanges, publishing } = state.payload;
   const latestMeasured = [...daily].reverse().find((row) => !row.missing_metrics.includes("day"));
-  const followerChanges = followerDailyChanges(daily);
-  const followerCoverage = { measured: summary.followers.measured_days, expected: summary.followers.expected_days };
-  const partialRange = summary.reach.measured_days < summary.reach.expected_days || summary.views.measured_days < summary.views.expected_days || summary.followers.full_period_change === null;
-  const warnings: ValidReportContextBlock["snapshot"]["warnings"] = partialRange ? ["partial_range"] : [];
+  const latestStock = stock.at(-1) ?? null;
+  const latestFollowers = [...stock].reverse().find((row) => row.followers_count !== null) ?? null;
+  const latestMedia = [...stock].reverse().find((row) => row.media_count !== null) ?? null;
+  const latestFollowerChange = [...stockChanges].reverse().find((row) => row.follower_change !== null) ?? null;
+  const latestMediaChange = [...stockChanges].reverse().find((row) => row.media_count_change !== null) ?? null;
+  const followerMeasured = stock.filter((row) => row.followers_count !== null).length;
+  const mediaMeasured = stock.filter((row) => row.media_count !== null).length;
+  const partialRange = summary.reach.measured_days < summary.reach.expected_days || summary.views.measured_days < summary.views.expected_days;
+  const warnings: ValidReportContextBlock["snapshot"]["warnings"] = [
+    ...(partialRange ? ["partial_range" as const] : []),
+    ...(!stock.length || stock.some((row) => row.missing_metrics.length) ? ["incomplete_measurement" as const] : []),
+  ];
   const completeDailySum = (value: AccountRangeMetric) => value.measured_days === value.expected_days ? value.daily_sum : null;
   const reportBlock: ValidReportContextBlock = { blockType: "account", title: "نبض الحساب", snapshot: {
     period: range,
@@ -71,33 +81,47 @@ export function AccountPulse({ range }: { range: InsightRange }) {
     formula: reportMetricFormulas.account_overview,
     selection: [{ key: "instagram:aqsana2026", label: "حساب أقصانا" }],
     values: [
-      { label: "عدد المتابعين في آخر يوم مقاس", value: summary.followers.last_observed, measured_n: summary.followers.measured_days },
-      { label: "التغير بين حدّي الفترة", value: summary.followers.full_period_change, measured_n: summary.followers.measured_days },
+      { label: "المتابعون في آخر رصد", value: latestFollowers?.followers_count ?? null, measured_n: followerMeasured },
+      { label: "عدد المواد في آخر رصد", value: latestMedia?.media_count ?? null, measured_n: mediaMeasured },
+      { label: "التغير بين الرصدين للمتابعين", value: latestFollowerChange?.follower_change ?? null, measured_n: latestFollowerChange ? 2 : 0 },
+      { label: "التغير بين الرصدين للمواد", value: latestMediaChange?.media_count_change ?? null, measured_n: latestMediaChange ? 2 : 0 },
       { label: "إجمالي الوصول للفترة المكتملة", value: completeDailySum(summary.reach), measured_n: summary.reach.measured_days },
       { label: "إجمالي المشاهدات للفترة المكتملة", value: completeDailySum(summary.views), measured_n: summary.views.measured_days },
       { label: "المواد المنشورة", value: publishing.published, measured_n: publishing.published === null ? 0 : 1 },
       { label: "فتحات النشر", value: publishing.slots, measured_n: publishing.slots === null ? 0 : 1 },
     ],
     series: [
-      { key: "followers", label: "المتابعون", points: daily.map((row) => ({ date: row.date, value: row.followers })) },
-      { key: "follower_change", label: "التغير اليومي", points: followerChanges.map((row) => ({ date: row.x, value: row.y })) },
       { key: "reach", label: "الوصول", points: daily.map((row) => ({ date: row.date, value: row.reach })) },
       { key: "reach_non_followers", label: "وصول غير المتابعين", points: daily.map((row) => ({ date: row.date, value: row.reach_non_followers })) },
     ],
-    completeness: { measured_n: Math.min(summary.followers.measured_days, summary.reach.measured_days, summary.views.measured_days), expected_n: summary.reach.expected_days },
+    completeness: { measured_n: Math.min(summary.reach.measured_days, summary.views.measured_days), expected_n: summary.reach.expected_days },
     warnings,
-    source_time: latestMeasured?.source_timestamp ?? null,
+    source_time: latestStock?.source_timestamp ?? latestMeasured?.source_timestamp ?? null,
+    stock_observations: stock.map((row) => ({
+      observation_key: row.observation_key,
+      observed_at: row.observed_at,
+      followers_count: row.followers_count,
+      media_count: row.media_count,
+      missing_metrics: row.missing_metrics,
+      source_time: row.source_timestamp,
+    })),
   } };
   return <div className="stack account-pulse">
     <div className="insight-section-actions"><AddToReportButton block={reportBlock} /></div>
     <section className="insight-card-grid account-pulse-grid" aria-label="ملخص نبض الحساب">
-      <MetricCard label="عدد المتابعين في آخر يوم مقاس" value={summary.followers.last_observed} coverage={followerCoverage} />
-      <MetricCard label="التغير بين حدّي الفترة" value={summary.followers.full_period_change} coverage={followerCoverage} />
+      <MetricCard label="المتابعون في آخر رصد" value={latestFollowers?.followers_count ?? null} coverage={{ measured: followerMeasured, expected: stock.length }} />
+      <MetricCard label="عدد المواد في آخر رصد" value={latestMedia?.media_count ?? null} coverage={{ measured: mediaMeasured, expected: stock.length }} />
+      <MetricCard label="التغير بين الرصدين للمتابعين" value={latestFollowerChange?.follower_change ?? null} coverage={{ measured: latestFollowerChange ? 2 : Math.min(followerMeasured, 2), expected: 2 }} />
+      <MetricCard label="التغير بين الرصدين للمواد" value={latestMediaChange?.media_count_change ?? null} coverage={{ measured: latestMediaChange ? 2 : Math.min(mediaMeasured, 2), expected: 2 }} />
       <MetricCard label="مجموع الوصول اليومي المقاس" value={summary.reach.daily_sum} coverage={coverage(summary.reach)} />
       <MetricCard label="مجموع المشاهدات اليومية المقاسة" value={summary.views.daily_sum} coverage={coverage(summary.views)} />
     </section>
 
-    {summary.followers.full_period_change === null && summary.followers.observed_change !== null ? <p className="soft-banner">لا يمكن حساب تغير الفترة كاملة لأن أحد حدّيها غير مقاس. التغير بين أول وآخر يومين مقاسين (<span className="num">{summary.followers.first_observed_date}</span> — <span className="num">{summary.followers.last_observed_date}</span>) هو <b className="num">{metric(summary.followers.observed_change)}</b>.</p> : null}
+    <div className="muted">
+      <p>وقت الرصد لأحدث قيمة متابعين: <span className="num">{latestFollowers?.observed_at ?? "—"}</span>.</p>
+      <p>وقت الرصد لأحدث عدد مواد: <span className="num">{latestMedia?.observed_at ?? "—"}</span>.</p>
+      <p>التغير بين الرصدين لا يمثل تغيرًا يوميًا ولا يُستكمل عبر الفجوات.</p>
+    </div>
 
     <section className="card cadence-card">
       <div><p className="eyebrow">إيقاع النشر ضمن الفترة</p><h2><span className="num">{metric(publishing.published)}</span> منشورة مقابل <span className="num">{metric(publishing.slots)}</span> فتحة</h2></div>
@@ -105,13 +129,13 @@ export function AccountPulse({ range }: { range: InsightRange }) {
     </section>
 
     <section className="card chart-card stack">
-      <div><h2>المتابعون عبر الزمن</h2><p className="muted">خط المتابعين هو لقطة يومية، وليس مجموعًا. إلغاء المتابعة غير متاح من Meta ويظهر كبيان غير متاح، لا كصفر.</p></div>
-      <MetricLineChart title="رصيد المتابعين اليومي" sourceTime={latestMeasured?.source_timestamp ?? null} series={[{ label: "المتابعون", points: daily.map((row) => ({ x: row.date, y: row.followers })) }]} />
+      <div><h2>رصيد الحساب</h2><p className="muted">كل نقطة رصد مستقل بوقت حقيقي. لا تُنسب إلى يوم تاريخي ولا تُستكمل بين الرصدات.</p></div>
+      <MetricLineChart title="رصد المتابعين" sourceTime={latestStock?.source_timestamp ?? null} series={[{ label: "المتابعون", points: stock.map((row) => ({ x: row.observed_at, y: row.followers_count })) }, { label: "عدد المواد", points: stock.map((row) => ({ x: row.observed_at, y: row.media_count })) }]} />
     </section>
 
     <section className="card chart-card stack">
-      <div><h2>التغير اليومي في المتابعين</h2><p className="muted">يُحسب فقط بين يومين متتاليين مقاسين. أي فجوة تبقى —. Meta لا يزوّدنا حاليًا بعدد إلغاءات المتابعة كقياس مستقل.</p></div>
-      <MetricLineChart title="التغير اليومي في رصيد المتابعين" sourceTime={latestMeasured?.source_timestamp ?? null} series={[{ label: "التغير اليومي", points: followerChanges }]} />
+      <div><h2>التغير بين الرصدين</h2><p className="muted">يُحسب فقط بين رصدين يحملان القياس نفسه. أي فجوة تبقى —. Meta لا يزوّدنا حاليًا بعدد إلغاءات المتابعة كقياس مستقل.</p></div>
+      <MetricLineChart title="التغير بين رصدات الحساب" sourceTime={latestStock?.source_timestamp ?? null} series={[{ label: "تغير المتابعين", points: stockChanges.map((row) => ({ x: row.observed_at, y: row.follower_change })) }, { label: "تغير عدد المواد", points: stockChanges.map((row) => ({ x: row.observed_at, y: row.media_count_change })) }]} />
     </section>
 
     <section className="card chart-card stack">

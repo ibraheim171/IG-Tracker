@@ -5,9 +5,10 @@
 
 var ANALYTICS_MAX_ROWS = 500;
 var ANALYTICS_ACCOUNT_WATERMARK_PROPERTY = "ANALYTICS_ACCOUNT_SENT_THROUGH";
+var ANALYTICS_ACCOUNT_STOCK_WATERMARK_PROPERTY = "ANALYTICS_ACCOUNT_STOCK_SENT_THROUGH";
 
 function analyticsEmptyBatch_() {
-  return { posts: [], post_daily: [], account_daily: [], demographics: [], collabs: [] };
+  return { posts: [], post_daily: [], account_daily: [], account_stock: [], demographics: [], collabs: [] };
 }
 
 function analyticsSummary_() {
@@ -26,12 +27,12 @@ function syncAnalyticsToTracker() {
   var now = new Date();
   var today = fmt_(now);
   var failures = [];
-  ["posts", "account", "demographics", "collabs"].forEach(function (stream) {
+  ["posts", "account_stock", "account", "demographics", "collabs"].forEach(function (stream) {
     var date = stream === "account" ? analyticsClosedAccountDate_(now) : today;
     var outcome = analyticsRunStream_(stream, date, function () {
-      return stream === "account"
-        ? syncAccountAnalytics_(SpreadsheetApp.getActiveSpreadsheet(), now)
-        : syncAnalyticsStream_(stream);
+      if (stream === "account") return syncAccountAnalytics_(SpreadsheetApp.getActiveSpreadsheet(), now);
+      if (stream === "account_stock") return syncAccountStockAnalytics_(SpreadsheetApp.getActiveSpreadsheet(), now);
+      return syncAnalyticsStream_(stream);
     });
     if (!outcome.ok) failures.push(stream);
   });
@@ -123,6 +124,59 @@ function analyticsSyncAccountRows_(rows) {
   return summary;
 }
 
+function analyticsReadAccountStock_(spreadsheet) {
+  var rows = [];
+  readSheet_(spreadsheet.getSheetByName(SHEETS.accountStock)).forEach(function (row) {
+    var observationKey = String(row.observation_key || "").trim();
+    var observedAt = analyticsIsoTimestamp_(row.observed_at);
+    var source = String(row.source || "").trim();
+    var followers = analyticsNonNegativeInteger_(row.followers_count);
+    var media = analyticsNonNegativeInteger_(row.media_count);
+    var missing = String(row.missing_metrics || "").split(",").map(function (name) {
+      return name.trim();
+    }).filter(Boolean).sort();
+    var expected = [];
+    if (followers === null) expected.push("followers_count");
+    if (media === null) expected.push("media_count");
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(observationKey) || !observedAt || source !== "instagram_profile"
+      || (followers === null && media === null)
+      || JSON.stringify(missing) !== JSON.stringify(expected)) {
+      throw new Error("ACCOUNT_STOCK_STORED_ROW_INCOMPLETE");
+    }
+    rows.push({
+      observation_key: observationKey,
+      observed_at: observedAt,
+      source: source,
+      followers_count: followers,
+      media_count: media,
+      missing_metrics: missing
+    });
+  });
+  rows.sort(function (left, right) { return left.observed_at.localeCompare(right.observed_at); });
+  return rows;
+}
+
+function analyticsSyncAccountStockRows_(rows) {
+  var properties = PropertiesService.getScriptProperties();
+  var watermark = properties.getProperty(ANALYTICS_ACCOUNT_STOCK_WATERMARK_PROPERTY);
+  var pending = rows.filter(function (row) { return !watermark || row.observed_at > watermark; });
+  var summary = analyticsSummary_();
+  analyticsChunk_(pending, ANALYTICS_MAX_ROWS).forEach(function (chunk) {
+    var batch = analyticsEmptyBatch_();
+    batch.account_stock = chunk;
+    var result = analyticsSendBatch_(batch);
+    analyticsAssertAccepted_(result);
+    properties.setProperty(ANALYTICS_ACCOUNT_STOCK_WATERMARK_PROPERTY, chunk[chunk.length - 1].observed_at);
+    analyticsAddResult_(summary, result, chunk.length);
+  });
+  return summary;
+}
+
+function syncAccountStockAnalytics_(spreadsheet) {
+  collectAccountStock_(spreadsheet);
+  return analyticsSyncAccountStockRows_(analyticsReadAccountStock_(spreadsheet));
+}
+
 function analyticsAssertAccepted_(result) {
   if (!result || result.ok !== true || Number(result.rejected_count) > 0) {
     throw new Error("ANALYTICS_BATCH_REJECTED");
@@ -130,7 +184,8 @@ function analyticsAssertAccepted_(result) {
 }
 
 function analyticsBatchSize_(batch) {
-  return batch.posts.length + batch.post_daily.length + batch.account_daily.length + batch.demographics.length + batch.collabs.length;
+  return batch.posts.length + batch.post_daily.length + batch.account_daily.length + batch.account_stock.length
+    + batch.demographics.length + batch.collabs.length;
 }
 
 function analyticsReadPosts_(spreadsheet) {
@@ -283,6 +338,7 @@ function analyticsSendBatch_(batch) {
     posts: batch.posts,
     post_daily: batch.post_daily,
     account_daily: batch.account_daily,
+    account_stock: batch.account_stock,
     demographics: batch.demographics,
     collabs: batch.collabs
   };

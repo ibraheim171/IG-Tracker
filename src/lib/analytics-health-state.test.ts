@@ -25,11 +25,13 @@ test("daily stream freshness uses the Hebron calendar and the two-day account la
     posts: "2026-09-25",
     account: "2026-09-23",
     audience: "2026-09-20",
+    accountStock: "2026-09-25T02:15:00Z",
   }, "2026-09-24T21:30:00Z");
 
   assert.deepEqual(summary.posts, { status: "fresh", latestDate: "2026-09-25", expectedDate: "2026-09-25" });
   assert.deepEqual(summary.account, { status: "fresh", latestDate: "2026-09-23", expectedDate: "2026-09-23" });
   assert.deepEqual(summary.audience, { status: "not_due", latestDate: "2026-09-20", expectedDate: "2026-09-27" });
+  assert.deepEqual(summary.accountStock, { status: "fresh", latestDate: "2026-09-25", expectedDate: "2026-09-25" });
 });
 
 test("missing and late streams are reported independently", () => {
@@ -37,19 +39,33 @@ test("missing and late streams are reported independently", () => {
     posts: "2026-09-22",
     account: null,
     audience: "2026-09-13",
+    accountStock: null,
   }, "2026-09-25T12:00:00Z");
 
   assert.equal(summary.posts.status, "stale");
   assert.equal(summary.account.status, "never_collected");
   assert.equal(summary.audience.status, "stale");
+  assert.equal(summary.accountStock.status, "never_collected");
 });
 
 test("weekly audience data is fresh on collection day and not due until the next Sunday", () => {
-  const sunday = summarizeAnalyticsFreshness({ posts: null, account: null, audience: "2026-09-27" }, "2026-09-27T12:00:00Z");
-  const monday = summarizeAnalyticsFreshness({ posts: null, account: null, audience: "2026-09-27" }, "2026-09-28T12:00:00Z");
-  const nextSunday = summarizeAnalyticsFreshness({ posts: null, account: null, audience: "2026-09-27" }, "2026-10-04T12:00:00Z");
+  const streams = { posts: null, account: null, audience: "2026-09-27", accountStock: null };
+  const sunday = summarizeAnalyticsFreshness(streams, "2026-09-27T12:00:00Z");
+  const monday = summarizeAnalyticsFreshness(streams, "2026-09-28T12:00:00Z");
+  const nextSunday = summarizeAnalyticsFreshness(streams, "2026-10-04T12:00:00Z");
 
   assert.equal(sunday.audience.status, "fresh");
   assert.equal(monday.audience.status, "not_due");
   assert.equal(nextSunday.audience.status, "stale");
+});
+
+test("account stock freshness uses observed_at independently of accepted post syncs", () => {
+  const stale = summarizeAnalyticsFreshness({
+    posts: "2026-09-30",
+    account: "2026-09-28",
+    audience: "2026-09-27",
+    accountStock: "2026-09-28T23:30:00Z",
+  }, "2026-09-30T12:00:00Z");
+  assert.equal(stale.posts.status, "fresh");
+  assert.equal(stale.accountStock.status, "stale");
 });

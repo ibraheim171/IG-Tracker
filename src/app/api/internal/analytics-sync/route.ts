@@ -44,8 +44,8 @@ function safeError(code: string, status: number, counts?: { received_count: numb
   }, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-function payloadRowCount(payload: { posts: unknown[]; post_daily: unknown[]; account_daily: unknown[]; demographics: unknown[]; collabs: unknown[] }) {
-  return payload.posts.length + payload.post_daily.length + payload.account_daily.length + payload.demographics.length + payload.collabs.length;
+function payloadRowCount(payload: { posts: unknown[]; post_daily: unknown[]; account_daily: unknown[]; account_stock: unknown[]; demographics: unknown[]; collabs: unknown[] }) {
+  return payload.posts.length + payload.post_daily.length + payload.account_daily.length + payload.account_stock.length + payload.demographics.length + payload.collabs.length;
 }
 
 function syncWriteDiagnostic(error: unknown) {

@@ -285,6 +285,44 @@ export type Database = {
           { foreignKeyName: "ig_account_daily_sync_run_id_fkey"; columns: ["sync_run_id"]; isOneToOne: false; referencedRelation: "analytics_sync_runs"; referencedColumns: ["id"] },
         ]
       }
+      ig_account_stock_observations: {
+        Row: {
+          created_at: string
+          followers_count: number | null
+          media_count: number | null
+          missing_metrics: string[]
+          observation_key: string
+          observed_at: string
+          source: string
+          source_timestamp: string
+          sync_run_id: string
+        }
+        Insert: {
+          created_at?: string
+          followers_count?: number | null
+          media_count?: number | null
+          missing_metrics?: string[]
+          observation_key: string
+          observed_at: string
+          source?: string
+          source_timestamp: string
+          sync_run_id: string
+        }
+        Update: {
+          created_at?: string
+          followers_count?: number | null
+          media_count?: number | null
+          missing_metrics?: string[]
+          observation_key?: string
+          observed_at?: string
+          source?: string
+          source_timestamp?: string
+          sync_run_id?: string
+        }
+        Relationships: [
+          { foreignKeyName: "ig_account_stock_observations_sync_run_id_fkey"; columns: ["sync_run_id"]; isOneToOne: false; referencedRelation: "analytics_sync_runs"; referencedColumns: ["id"] },
+        ]
+      }
       ig_demographics: {
         Row: {
           dimension: string

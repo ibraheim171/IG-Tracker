@@ -6,6 +6,8 @@
  *   ANALYTICS_SYNC_URL
  *   ANALYTICS_SYNC_SECRET
  *   ANALYTICS_ACCOUNT_SENT_THROUGH
+ * Managed after the first accepted stock batch:
+ *   ANALYTICS_ACCOUNT_STOCK_SENT_THROUGH
  *
  * AnalyticsSync.gs owns transport and watermarks. This file owns collection.
  */
@@ -27,6 +29,7 @@ var M_POST = ["views", "reach", "likes", "comments", "saved", "shares", "total_i
 
 var SHEETS = {
   account: "account_daily",
+  accountStock: "account_stock",
   posts: "posts",
   daily: "post_daily",
   collabs: "collabs",
@@ -72,6 +75,8 @@ function setup() {
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   mkSheet_(spreadsheet, SHEETS.account, ["date", "followers", "media_count", "reach", "views",
     "reach_followers", "reach_non_followers", "follows", "unfollows"]);
+  mkSheet_(spreadsheet, SHEETS.accountStock, ["observation_key", "observed_at", "source",
+    "followers_count", "media_count", "missing_metrics"]);
   mkSheet_(spreadsheet, SHEETS.posts, ["post_id", "published_at", "media_type", "product_type", "permalink", "caption"]);
   mkSheet_(spreadsheet, SHEETS.daily, ["snapshot_date", "post_id", "age_days", "likes", "comments", "reach", "views",
     "saved", "shares", "interactions", "profile_visits", "follows", "avg_watch_ms"]);
@@ -190,6 +195,11 @@ function dailyPull() {
   });
   if (!posts.ok) failures.push("posts");
 
+  var stock = analyticsRunStream_("account_stock", today, function () {
+    return syncAccountStockAnalytics_(spreadsheet, now);
+  });
+  if (!stock.ok) failures.push("account_stock");
+
   var account = analyticsRunStream_("account", closedAccountDate, function () {
     return syncAccountAnalytics_(spreadsheet, now);
   });
@@ -202,6 +212,56 @@ function dailyPull() {
 
   CacheService.getScriptCache().remove("portal");
   if (failures.length) throw new Error("ANALYTICS_STREAM_FAILURE: " + failures.join(","));
+}
+
+function analyticsStoredAccountStockForDay_(spreadsheet, day) {
+  return analyticsReadAccountStock_(spreadsheet).filter(function (row) {
+    return fmt_(new Date(row.observed_at)) === day;
+  });
+}
+
+function collectAccountStock_(spreadsheet) {
+  return analyticsWithScriptLock_(function () {
+    var today = fmt_(new Date());
+    var stored = analyticsStoredAccountStockForDay_(spreadsheet, today);
+    if (stored.length > 1) throw new Error("ACCOUNT_STOCK_STORED_DAY_CONFLICT");
+    if (stored.length === 1) return { status: "already_present", observation: stored[0] };
+
+    var response = igGet_("/me", { fields: "followers_count,media_count" });
+    if (response.error) throw new Error("ACCOUNT_STOCK_COLLECTION_FAILED");
+    var observedAt = new Date().toISOString();
+    var followers = analyticsNonNegativeInteger_(response.followers_count);
+    var media = analyticsNonNegativeInteger_(response.media_count);
+    if (followers === null && media === null) throw new Error("ACCOUNT_STOCK_EMPTY");
+    var missing = [];
+    if (followers === null) missing.push("followers_count");
+    if (media === null) missing.push("media_count");
+    var semantic = JSON.stringify({
+      observed_at: observedAt,
+      source: "instagram_profile",
+      followers_count: followers,
+      media_count: media,
+      missing_metrics: missing
+    });
+    var observation = {
+      observation_key: "gas.account_stock." + analyticsSha256_(semantic),
+      observed_at: observedAt,
+      source: "instagram_profile",
+      followers_count: followers,
+      media_count: media,
+      missing_metrics: missing
+    };
+    var sheet = spreadsheet.getSheetByName(SHEETS.accountStock);
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, 6).setValues([[
+      observation.observation_key,
+      observation.observed_at,
+      observation.source,
+      followers === null ? "" : followers,
+      media === null ? "" : media,
+      missing.join(",")
+    ]]);
+    return { status: "inserted", observation: observation };
+  });
 }
 
 function pullAccountDay_(spreadsheet, date) {

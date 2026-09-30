@@ -4,11 +4,17 @@ import test from "node:test";
 
 const source = readFileSync("src/components/insights/account-pulse.tsx", "utf8");
 
-test("account pulse labels daily sums and separates follower stock from daily delta", () => {
+test("account pulse labels daily flows and observed stock without fabricating daily follower values", () => {
   assert.match(source, /مجموع الوصول اليومي المقاس/);
   assert.match(source, /مجموع المشاهدات اليومية المقاسة/);
-  assert.match(source, /رصيد المتابعين اليومي/);
-  assert.match(source, /التغير اليومي في المتابعين/);
+  assert.match(source, /رصيد الحساب/);
+  assert.match(source, /وقت الرصد لأحدث قيمة متابعين/);
+  assert.match(source, /latestFollowers\?\.observed_at/);
+  assert.match(source, /وقت الرصد لأحدث عدد مواد/);
+  assert.match(source, /latestMedia\?\.observed_at/);
+  assert.match(source, /وقت الرصد/);
+  assert.match(source, /التغير بين الرصدين/);
+  assert.doesNotMatch(source, /رصيد المتابعين اليومي|التغير اليومي في المتابعين/);
   assert.doesNotMatch(source, /وصول فريد|unique reach/i);
 });
 

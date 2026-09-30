@@ -27,11 +27,12 @@ test("analytics health reads the latest stored date for each stream instead of i
   assert.match(route, /from\("ig_post_daily"\)[\s\S]+order\("snapshot_date"/);
   assert.match(route, /from\("ig_account_daily"\)[\s\S]+order\("date"/);
   assert.match(route, /from\("ig_demographics"\)[\s\S]+order\("snapshot_date"/);
+  assert.match(route, /from\("ig_account_stock_observations"\)[\s\S]+order\("observed_at"/);
   assert.match(route, /streams/);
   assert.match(health, /summarizeAnalyticsFreshness/);
   for (const label of ["المنشورات", "الحساب", "الجمهور", "حديثة", "متأخرة", "لم تُجمع", "غير مستحقة بعد"]) {
     assert.match(health, new RegExp(label));
   }
   assert.match(health, /مقاييس الحساب اليومية/);
-  assert.match(health, /رصيد المتابعين وعدد المواد غير متاحين ضمن هذا القياس/);
+  assert.match(health, /رصيد الحساب/);
 });

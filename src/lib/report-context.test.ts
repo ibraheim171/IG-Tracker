@@ -10,7 +10,7 @@ import {
 const block = {
   title: "مقارنة المسارات",
   block_type: "comparison",
-  formula_version: ANALYTICS_FORMULA_VERSION,
+  formula_version: "analytics-formulas-v1",
   input_snapshot: {
     period: { start: "2026-09-01", end: "2026-09-30" },
     filters: { metric: "signal", dimension: "track" },
@@ -61,4 +61,37 @@ test("composer rejects malformed stored snapshots instead of crashing", () => {
     () => composeMonthlyReportInput({ title: "سبتمبر", month: "2026-09-01", context_note: null }, [{ ...block, input_snapshot: {} }]),
     /INVALID_STORED_REPORT_CONTEXT/,
   );
+});
+
+test("account stock v2 snapshots preserve observation provenance while v1 blocks remain readable", () => {
+  assert.equal(ANALYTICS_FORMULA_VERSION, "analytics-formulas-v2");
+  const accountBlock = {
+    title: "نبض الحساب",
+    block_type: "account",
+    formula_version: ANALYTICS_FORMULA_VERSION,
+    input_snapshot: {
+      ...block.input_snapshot,
+      metric: "account_overview",
+      formula: "تدفقات الحساب يومية؛ رصيد المتابعين والمواد لقطات مستقلة بوقت رصد حقيقي؛ التغير محسوب بين رصدين مقاسين فقط",
+      values: [
+        { label: "المتابعون في آخر رصد", value: 105, measured_n: 2 },
+        { label: "التغير بين الرصدين", value: 5, measured_n: 2 },
+      ],
+      completeness: { measured_n: 2, expected_n: 2 },
+      warnings: [],
+      source_time: "2026-09-04T03:01:00Z",
+      stock_observations: [
+        { observation_key: "stock-1", observed_at: "2026-09-01T03:00:00Z", followers_count: 100, media_count: 20, missing_metrics: [], source_time: "2026-09-01T03:01:00Z" },
+        { observation_key: "stock-2", observed_at: "2026-09-04T03:00:00Z", followers_count: 105, media_count: null, missing_metrics: ["media_count"], source_time: "2026-09-04T03:01:00Z" },
+      ],
+    },
+  };
+  assert.equal(validateReportContextBlock({ blockType: accountBlock.block_type, title: accountBlock.title, snapshot: accountBlock.input_snapshot }).ok, true);
+  const markdown = composeMonthlyReportInput({ title: "سبتمبر", month: "2026-09-01", context_note: null }, [accountBlock]);
+  assert.match(markdown, /stock-1/);
+  assert.match(markdown, /2026-09-04T03:00:00Z/);
+  assert.match(markdown, /N=2/);
+  assert.match(markdown, /analytics-formulas-v2/);
+
+  assert.doesNotThrow(() => composeMonthlyReportInput({ title: "قديم", month: "2026-08-01", context_note: null }, [block]));
 });

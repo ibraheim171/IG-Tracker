@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import {
   analyticsIdempotencyHash,
@@ -29,6 +29,7 @@ const basePayload = {
   posts: [{ post_id: "media-1", published_at: "2026-09-07T18:00:00Z", media_type: "VIDEO", product_type: "REELS", permalink: "https://instagram.com/reel/Ab_C-1/?utm_source=x", caption: "وصف" }],
   post_daily: [{ snapshot_date: "2026-09-08", post_id: "media-1", age_days: 1, likes: 0, comments: 2, reach: 100, views: null, saved: 4, shares: 3, interactions: 9, profile_visits: null, follows: null, avg_watch_ms: 1200, missing_metrics: ["views", "profile_visits", "follows"] }],
   account_daily: [{ date: "2026-09-08", followers: 1000, media_count: 50, reach: 0, views: null, reach_followers: 0, reach_non_followers: null, follows: 0, unfollows: null, missing_metrics: ["views", "reach_non_followers", "unfollows"] }],
+  account_stock: [{ observation_key: "gas.account_stock.0123456789abcdef", observed_at: "2026-09-08T12:00:00Z", source: "instagram_profile" as const, followers_count: 1000, media_count: null, missing_metrics: ["media_count"] as Array<"followers_count" | "media_count"> }],
   demographics: [{ snapshot_date: "2026-09-08", dimension: "city", key: "القدس", value: 40 }],
   collabs: [{ date: "2026-09-08", partner: "شريك", type: "collab", notes: null, net_follows_before: null, net_follows_after: null, follows_lift: null, reach_before: 100, reach_after: 150, reach_lift_pct: 50, nonfollower_before: null, nonfollower_after: null, nonfollower_lift_pct: null, computed_at: "2026-09-08T12:00:00Z" }],
 };
@@ -114,8 +115,27 @@ test("null remains unknown while numeric zero remains a real measurement", () =>
   assert.equal(validated.value.post_daily[0].views, null);
   assert.equal(validated.value.account_daily[0].reach, 0);
   assert.equal(validated.value.account_daily[0].views, null);
+  assert.equal(validated.value.account_stock[0].followers_count, 1000);
+  assert.equal(validated.value.account_stock[0].media_count, null);
   assert.equal(validateAnalyticsPayload({ ...basePayload, post_daily: [{ ...basePayload.post_daily[0], missing_metrics: [] }] }).ok, false);
   assert.equal(validateAnalyticsPayload({ ...basePayload, account_daily: [{ ...basePayload.account_daily[0], views: 0 }] }).ok, false);
+  assert.equal(validateAnalyticsPayload({ ...basePayload, account_stock: [{ ...basePayload.account_stock[0], media_count: 0, missing_metrics: [] }] }).ok, true);
+  assert.equal(validateAnalyticsPayload({ ...basePayload, account_stock: [{ ...basePayload.account_stock[0], media_count: 0 }] }).ok, false);
+});
+
+test("account stock validates observed immutable measurements and rejects malformed completeness", () => {
+  assert.equal(validateAnalyticsPayload(basePayload).ok, true);
+  for (const account_stock of [
+    [{ ...basePayload.account_stock[0], observation_key: "x" }],
+    [{ ...basePayload.account_stock[0], observed_at: "2026-09-08" }],
+    [{ ...basePayload.account_stock[0], source: "manual" }],
+    [{ ...basePayload.account_stock[0], followers_count: -1 }],
+    [{ ...basePayload.account_stock[0], followers_count: null, media_count: null, missing_metrics: ["followers_count", "media_count"] }],
+    [{ ...basePayload.account_stock[0], missing_metrics: [] }],
+    [{ ...basePayload.account_stock[0], observed_at: "2026-09-08T12:00:01Z" }],
+  ]) {
+    assert.equal(validateAnalyticsPayload({ ...basePayload, account_stock }).ok, false);
+  }
 });
 
 test("rates and signal use the specified formula and never manufacture values without reach", () => {
@@ -239,11 +259,16 @@ test("normalized exact duplicate snapshots are idempotent but divergent duplicat
     account_daily: [basePayload.account_daily[0], { ...basePayload.account_daily[0], missing_metrics: [...basePayload.account_daily[0].missing_metrics].reverse() }],
     demographics: [basePayload.demographics[0], { ...basePayload.demographics[0], dimension: " city ", key: " القدس " }],
     collabs: [basePayload.collabs[0], { ...basePayload.collabs[0], partner: " شريك ", type: " collab " }],
+    account_stock: [basePayload.account_stock[0], { ...basePayload.account_stock[0], missing_metrics: ["media_count"] }],
   };
   assert.equal(validateAnalyticsPayload(identical).ok, true);
   assert.deepEqual(validateAnalyticsPayload({
     ...basePayload,
     post_daily: [basePayload.post_daily[0], { ...basePayload.post_daily[0], reach: 101 }],
+  }), { ok: false, code: "E_DIVERGENT_DUPLICATE" });
+  assert.deepEqual(validateAnalyticsPayload({
+    ...basePayload,
+    account_stock: [basePayload.account_stock[0], { ...basePayload.account_stock[0], followers_count: 1001 }],
   }), { ok: false, code: "E_DIVERGENT_DUPLICATE" });
   assert.equal(isTruthfulAcceptedIngestionResult({
     received_count: 5,
@@ -259,6 +284,35 @@ test("normalized exact duplicate snapshots are idempotent but divergent duplicat
     already_present_identical_count: 5,
     rejected_count: 0,
   }, 5), false);
+});
+
+test("account stock migration keeps ingestion atomic, immutable, and server-only", () => {
+  const files = readdirSync("supabase/migrations").filter((name) => name.endsWith("_account_stock_observations.sql"));
+  assert.equal(files.length, 1);
+  const sql = readFileSync(`supabase/migrations/${files[0]}`, "utf8");
+  assert.match(sql, /create table public\.ig_account_stock_observations/i);
+  assert.match(sql, /observation_key\s+text\s+primary key/i);
+  assert.match(sql, /observed_at\s+timestamptz\s+not null/i);
+  assert.match(sql, /source\s+text\s+not null\s+default\s+'instagram_profile'/i);
+  assert.match(sql, /followers_count\s+integer/i);
+  assert.match(sql, /media_count\s+integer/i);
+  assert.match(sql, /missing_metrics\s+text\[\]\s+not null\s+default\s+'\{\}'::text\[\]/i);
+  assert.match(sql, /unique\s*\(source, observed_at\)/i);
+  assert.match(sql, /check\s*\(followers_count is not null or media_count is not null\)/i);
+  assert.match(sql, /guard_immutable_analytics_snapshot/i);
+  assert.match(sql, /enable row level security[\s\S]+force row level security/i);
+  assert.match(sql, /revoke all on table public\.ig_account_stock_observations from public, anon, authenticated, service_role/i);
+  assert.match(sql, /grant select on table public\.ig_account_stock_observations to service_role/i);
+  assert.match(sql, /alter function public\.ingest_analytics_batch_impl[\s\S]+rename to ingest_analytics_batch_without_account_stock/i);
+  assert.match(sql, /create function public\.ingest_analytics_batch_impl[\s\S]+security definer[\s\S]+set search_path = pg_catalog, public/i);
+  assert.match(sql, /pg_advisory_xact_lock\(hashtext\('analytics-ingestion-v1'\)\)/i);
+  assert.match(sql, /DIVERGENT_ACCOUNT_STOCK_OBSERVATION/i);
+  assert.ok(sql.indexOf("DIVERGENT_ACCOUNT_STOCK_OBSERVATION") < sql.indexOf("base_result := public.ingest_analytics_batch_without_account_stock("));
+  assert.match(sql, /jsonb_array_length\(coalesce\(p_payload->'account_stock'[\s\S]+BATCH_TOO_LARGE/i);
+  assert.match(sql, /'account_stock'[\s\S]+'already_present_identical'/i);
+  assert.match(sql, /revoke all on function public\.ingest_analytics_batch_impl[\s\S]+from public, anon, authenticated, service_role/i);
+  assert.match(sql, /grant execute on function public\.ingest_analytics_batch_impl[\s\S]+to service_role/i);
+  assert.doesNotMatch(sql, /create\s+(?:or replace\s+)?function public\.ingest_account_stock/i);
 });
 
 test("sync stream cancels immediately after the bounded request limit", async () => {

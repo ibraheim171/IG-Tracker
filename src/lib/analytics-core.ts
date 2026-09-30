@@ -53,6 +53,15 @@ export type AnalyticsPost = {
   caption: string | null;
 };
 
+export type AccountStockInput = {
+  observation_key: string;
+  observed_at: string;
+  source: "instagram_profile";
+  followers_count: NullableMetric;
+  media_count: NullableMetric;
+  missing_metrics: Array<"followers_count" | "media_count">;
+};
+
 type LinkReviewPost = {
   media_id: string;
   caption?: string | null;
@@ -125,6 +134,7 @@ export type AnalyticsSyncPayload = {
   posts: AnalyticsPost[];
   post_daily: PostDailyInput[];
   account_daily: Record<string, unknown>[];
+  account_stock: AccountStockInput[];
   demographics: Record<string, unknown>[];
   collabs: Record<string, unknown>[];
 };
@@ -152,6 +162,7 @@ function canonicalizeSemanticValue(value: unknown): unknown {
 export function analyticsIdempotencyHash(payload: AnalyticsSyncPayload) {
   const measurements = {
     account_daily: payload.account_daily,
+    account_stock: payload.account_stock,
     collabs: payload.collabs,
     demographics: payload.demographics,
     post_daily: payload.post_daily,
@@ -323,25 +334,38 @@ export async function readBoundedAnalyticsBody(stream: ReadableStream<Uint8Array
 
 export function validateAnalyticsPayload(value: unknown): { ok: true; value: AnalyticsSyncPayload } | { ok: false; code: string } {
   if (!isRecord(value)) return { ok: false, code: "E_PAYLOAD" };
-  const allowed = new Set(["idempotency_key", "source_timestamp", "posts", "post_daily", "account_daily", "demographics", "collabs"]);
+  const allowed = new Set(["idempotency_key", "source_timestamp", "posts", "post_daily", "account_daily", "account_stock", "demographics", "collabs"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return { ok: false, code: "E_PAYLOAD" };
   if (typeof value.idempotency_key !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(value.idempotency_key)) return { ok: false, code: "E_IDEMPOTENCY" };
   if (!isTimestamp(value.source_timestamp)) return { ok: false, code: "E_SOURCE_TIMESTAMP" };
-  const arrays = [value.posts, value.post_daily, value.account_daily, value.demographics, value.collabs];
+  const arrays = [value.posts, value.post_daily, value.account_daily, value.account_stock, value.demographics, value.collabs];
   if (arrays.some((rows) => !Array.isArray(rows))) return { ok: false, code: "E_BATCH_SIZE" };
   if ((arrays as unknown[][]).reduce((total, rows) => total + rows.length, 0) > analyticsSyncMaxRows) return { ok: false, code: "E_BATCH_SIZE" };
-  const [posts, postDaily, accountDaily, demographics, collabs] = arrays as unknown[][];
-  if (!posts.every(isPost) || !postDaily.every(isPostDaily) || !accountDaily.every(isAccountDaily) || !demographics.every(isDemographic) || !collabs.every(isCollab)) return { ok: false, code: "E_ROW" };
+  const [posts, postDaily, accountDaily, accountStock, demographics, collabs] = arrays as unknown[][];
+  if (!posts.every(isPost) || !postDaily.every(isPostDaily) || !accountDaily.every(isAccountDaily) || !accountStock.every(isAccountStock) || !demographics.every(isDemographic) || !collabs.every(isCollab)) return { ok: false, code: "E_ROW" };
+  if ((accountStock as AccountStockInput[]).some((row) => Date.parse(row.observed_at) > Date.parse(value.source_timestamp as string))) return { ok: false, code: "E_ROW" };
   const postIds = new Set((posts as AnalyticsPost[]).map((row) => row.post_id));
   if ((postDaily as PostDailyInput[]).some((row) => !postIds.has(row.post_id))) return { ok: false, code: "E_POST_REFERENCE" };
   if (
     hasDivergentDuplicate(posts, (row) => String(row.post_id), normalizePost)
     || hasDivergentDuplicate(postDaily, (row) => `${row.post_id}\u0000${row.snapshot_date}`, normalizePostDaily)
     || hasDivergentDuplicate(accountDaily, (row) => String(row.date), normalizeAccountDaily)
+    || hasDivergentDuplicate(accountStock, (row) => String(row.observation_key), normalizeAccountStock)
     || hasDivergentDuplicate(demographics, (row) => `${row.snapshot_date}\u0000${String(row.dimension).trim()}\u0000${String(row.key).trim()}`, normalizeDemographic)
     || hasDivergentDuplicate(collabs, (row) => `${row.date}\u0000${String(row.partner).trim()}\u0000${normalizeOptionalText(row.type) ?? ""}`, normalizeCollab)
   ) return { ok: false, code: "E_DIVERGENT_DUPLICATE" };
   return { ok: true, value: value as unknown as AnalyticsSyncPayload };
+}
+
+function normalizeAccountStock(row: Record<string, unknown>) {
+  return {
+    observation_key: row.observation_key,
+    observed_at: row.observed_at,
+    source: row.source,
+    followers_count: row.followers_count,
+    media_count: row.media_count,
+    missing_metrics: normalizeMetricNames(row.missing_metrics),
+  };
 }
 
 function hasDivergentDuplicate(
@@ -440,6 +464,21 @@ function isAccountDaily(value: unknown) {
   if (!value.missing_metrics.every((entry) => typeof entry === "string" && fields.slice(1, -1).includes(entry))) return false;
   const missing = new Set(value.missing_metrics);
   return fields.slice(1, -1).every((name) => nullableNonNegativeInteger(value[name]) && (value[name] === null) === missing.has(name));
+}
+
+function isAccountStock(value: unknown): value is AccountStockInput {
+  const fields = ["observation_key", "observed_at", "source", "followers_count", "media_count", "missing_metrics"];
+  const metricFields = ["followers_count", "media_count"] as const;
+  if (!hasOnly(value, fields)
+    || typeof value.observation_key !== "string"
+    || !/^[A-Za-z0-9._:-]{8,128}$/.test(value.observation_key)
+    || !isTimestamp(value.observed_at)
+    || value.source !== "instagram_profile"
+    || !Array.isArray(value.missing_metrics)
+    || !value.missing_metrics.every((entry) => typeof entry === "string" && metricFields.includes(entry as typeof metricFields[number]))) return false;
+  const missing = new Set(value.missing_metrics);
+  return metricFields.every((name) => nullableNonNegativeInteger(value[name]) && (value[name] === null) === missing.has(name))
+    && metricFields.some((name) => value[name] !== null);
 }
 
 function isDemographic(value: unknown) {

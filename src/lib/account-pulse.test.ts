@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   completeAccountDailyRange,
   currentMonthRange,
-  followerDailyChanges,
+  accountStockChanges,
   latestAudienceSnapshot,
   lineSegments,
   previousMonthRange,
@@ -15,17 +15,15 @@ test("month presets use calendar months in the account timezone", () => {
   assert.deepEqual(previousMonthRange(now), { start: "2026-08-01", end: "2026-08-31" });
 });
 
-test("daily follower change stays null across missing account days", () => {
-  assert.deepEqual(followerDailyChanges([
-    { date: "2026-09-01", followers: 100 },
-    { date: "2026-09-02", followers: 104 },
-    { date: "2026-09-03", followers: null },
-    { date: "2026-09-04", followers: 109 },
+test("stock change is calculated only between measured observations and keeps gaps explicit", () => {
+  assert.deepEqual(accountStockChanges([
+    { observation_key: "o1", observed_at: "2026-09-01T03:00:00Z", source: "instagram_profile", followers_count: 100, media_count: 20, missing_metrics: [], source_timestamp: "2026-09-01T03:01:00Z" },
+    { observation_key: "o2", observed_at: "2026-09-04T03:00:00Z", source: "instagram_profile", followers_count: 109, media_count: null, missing_metrics: ["media_count"], source_timestamp: "2026-09-04T03:01:00Z" },
+    { observation_key: "o3", observed_at: "2026-09-08T03:00:00Z", source: "instagram_profile", followers_count: null, media_count: 23, missing_metrics: ["followers_count"], source_timestamp: "2026-09-08T03:01:00Z" },
   ]), [
-    { x: "2026-09-01", y: null },
-    { x: "2026-09-02", y: 4 },
-    { x: "2026-09-03", y: null },
-    { x: "2026-09-04", y: null },
+    { observation_key: "o1", observed_at: "2026-09-01T03:00:00Z", followers_count: 100, media_count: 20, follower_change: null, media_count_change: null },
+    { observation_key: "o2", observed_at: "2026-09-04T03:00:00Z", followers_count: 109, media_count: null, follower_change: 9, media_count_change: null },
+    { observation_key: "o3", observed_at: "2026-09-08T03:00:00Z", followers_count: null, media_count: 23, follower_change: null, media_count_change: 3 },
   ]);
 });
 
@@ -46,17 +44,16 @@ test("a completely absent account day becomes a null chart gap", () => {
   const complete = completeAccountDailyRange(
     { start: "2026-09-01", end: "2026-09-03" },
     [{
-      date: "2026-09-01", followers: 10, media_count: 2, reach: 3, views: 4,
+      date: "2026-09-01", reach: 3, views: 4,
       reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: [],
     }, {
-      date: "2026-09-03", followers: 12, media_count: 2, reach: 5, views: 8,
+      date: "2026-09-03", reach: 5, views: 8,
       reach_followers: null, reach_non_followers: null, follows: null, unfollows: null, missing_metrics: [],
     }],
   );
 
   assert.equal(complete.length, 3);
   assert.equal(complete[1].date, "2026-09-02");
-  assert.equal(complete[1].followers, null);
   assert.equal(complete[1].reach, null);
   assert.ok(complete[1].missing_metrics.includes("day"));
 });
