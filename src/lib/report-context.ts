@@ -69,12 +69,30 @@ function isoDate(value: unknown): value is string {
   return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
 }
 
+function stockTimestamp(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[0-9]{4}-[0-9]{2}-[0-9]{2}T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?(?:Z|[+-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))$/.test(value)
+    && Number(value.slice(0, 4)) > 0 && isoDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
+}
+
+function stockTimeMicros(value: string) {
+  // Date.parse drops sub-millisecond precision; preserve PostgreSQL microseconds.
+  const fraction = /\.([0-9]+)/.exec(value)?.[1] ?? "";
+  return BigInt(Date.parse(value)) * BigInt(1000) + BigInt(fraction.padEnd(6, "0").slice(3));
+}
+
+function stockInteger(value: unknown) {
+  return value === null || typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 2147483647;
+}
+
 export function validateReportContextBlock(input: unknown, formulaVersion = ANALYTICS_FORMULA_VERSION): { ok: true; value: ValidReportContextBlock } | { ok: false; code: string; message: string } {
   if (!isRecord(input)) return { ok: false, code: "E_BLOCK", message: "بيانات المقطع غير صحيحة." };
   const { blockType, snapshot } = input;
   const title = typeof input.title === "string" ? input.title.trim() : "";
   if (!reportBlockTypes.includes(blockType as ReportBlockType) || title.length < 1 || title.length > 160 || !isRecord(snapshot)) return { ok: false, code: "E_BLOCK", message: "بيانات المقطع غير صحيحة." };
-  if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > 65536) return { ok: false, code: "E_BLOCK_SIZE", message: "حجم المقطع أكبر من الحد المسموح." };
+  const accountV2 = formulaVersion === ANALYTICS_FORMULA_VERSION && snapshot.metric === "account_overview";
+  const maxBytes = accountV2 && blockType === "account" ? 262144 : 65536;
+  if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > maxBytes) return { ok: false, code: "E_BLOCK_SIZE", message: "حجم المقطع أكبر من الحد المسموح." };
 
   const period = snapshot.period;
   if (period !== null && (!isRecord(period) || !isoDate(period.start) || !isoDate(period.end) || period.start > period.end)) return { ok: false, code: "E_PERIOD", message: "فترة المقطع غير صحيحة." };
@@ -100,24 +118,25 @@ export function validateReportContextBlock(input: unknown, formulaVersion = ANAL
   if (!Array.isArray(snapshot.warnings) || snapshot.warnings.some((warning) => !reportWarningCodes.includes(warning as ReportWarningCode))) return { ok: false, code: "E_WARNINGS", message: "تحذيرات المقطع غير صحيحة." };
   if (snapshot.source_time !== null && (typeof snapshot.source_time !== "string" || Number.isNaN(Date.parse(snapshot.source_time)))) return { ok: false, code: "E_SOURCE_TIME", message: "وقت المصدر غير صحيح." };
   let stockObservations: ReportStockObservation[] | undefined;
-  if (formulaVersion === ANALYTICS_FORMULA_VERSION && blockType === "account") {
+  if (accountV2) {
+    if (snapshot.source_time !== null && !stockTimestamp(snapshot.source_time)) return { ok: false, code: "E_SOURCE_TIME", message: "وقت المصدر غير صحيح." };
     if (!Array.isArray(snapshot.stock_observations) || snapshot.stock_observations.length > 366) return { ok: false, code: "E_STOCK_OBSERVATIONS", message: "رصدات رصيد الحساب غير صحيحة." };
     stockObservations = [];
     for (const raw of snapshot.stock_observations) {
-      if (!isRecord(raw) || typeof raw.observation_key !== "string" || !raw.observation_key.trim() || raw.observation_key.length > 128
-        || typeof raw.observed_at !== "string" || Number.isNaN(Date.parse(raw.observed_at))
-        || raw.followers_count !== null && (!Number.isInteger(raw.followers_count) || (raw.followers_count as number) < 0)
-        || raw.media_count !== null && (!Number.isInteger(raw.media_count) || (raw.media_count as number) < 0)
+      if (!isRecord(raw) || typeof raw.observation_key !== "string" || /^[A-Za-z0-9._:-]{8,128}$/.exec(raw.observation_key)?.[0] !== raw.observation_key
+        || !stockTimestamp(raw.observed_at) || !stockTimestamp(raw.source_time)
+        || stockTimeMicros(raw.observed_at) > stockTimeMicros(raw.source_time)
+        || !stockInteger(raw.followers_count) || !stockInteger(raw.media_count)
         || raw.followers_count === null && raw.media_count === null
         || !Array.isArray(raw.missing_metrics)
         || raw.missing_metrics.some((metric) => metric !== "followers_count" && metric !== "media_count")
         || (raw.followers_count === null) !== raw.missing_metrics.includes("followers_count")
         || (raw.media_count === null) !== raw.missing_metrics.includes("media_count")
-        || typeof raw.source_time !== "string" || Number.isNaN(Date.parse(raw.source_time))) {
+        || JSON.stringify(raw.missing_metrics) !== JSON.stringify(["followers_count", "media_count"].filter(metric => raw[metric] === null))) {
         return { ok: false, code: "E_STOCK_OBSERVATIONS", message: "رصدات رصيد الحساب غير صحيحة." };
       }
       stockObservations.push({
-        observation_key: raw.observation_key.trim(),
+        observation_key: raw.observation_key,
         observed_at: raw.observed_at,
         followers_count: raw.followers_count as number | null,
         media_count: raw.media_count as number | null,
