@@ -275,6 +275,37 @@ grant execute on function public.ingest_analytics_batch_impl(jsonb, text, timest
 alter function public.ingest_analytics_batch_impl(jsonb, text, timestamptz, timestamptz, text)
   owner to postgres;
 
+-- Recompile the gateway after the implementation rename so existing sessions
+-- resolve the current implementation instead of retaining the previous OID.
+create or replace function public.ingest_analytics_batch(
+  p_payload jsonb,
+  p_idempotency_key text,
+  p_signature_timestamp timestamptz,
+  p_source_timestamp timestamptz,
+  p_request_sha256 text
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+begin
+  return public.ingest_analytics_batch_impl(
+    p_payload,
+    p_idempotency_key,
+    p_signature_timestamp,
+    p_source_timestamp,
+    p_request_sha256
+  );
+end;
+$$;
+
+revoke all on function public.ingest_analytics_batch(jsonb, text, timestamptz, timestamptz, text)
+  from public, anon, authenticated, service_role;
+grant execute on function public.ingest_analytics_batch(jsonb, text, timestamptz, timestamptz, text)
+  to service_role;
+alter function public.ingest_analytics_batch(jsonb, text, timestamptz, timestamptz, text)
+  owner to postgres;
+
 -- Preserve legacy report blocks while requiring provenance for new account-stock snapshots.
 alter function public.valid_report_context_snapshot(jsonb, text)
   rename to valid_report_context_snapshot_v1;

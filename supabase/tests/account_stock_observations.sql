@@ -22,11 +22,41 @@ insert into account_stock_test_payload values (
 );
 grant select on account_stock_test_payload to service_role;
 
+-- Catch a privileged or misconfigured gateway independently of its return values.
+do $$
+begin
+  if not exists (
+    select 1 from pg_proc p join pg_language l on l.oid = p.prolang
+    where p.oid = 'public.ingest_analytics_batch(jsonb,text,timestamptz,timestamptz,text)'::regprocedure
+      and not p.prosecdef and l.lanname = 'plpgsql'
+      and p.proowner = 'postgres'::regrole::oid
+      and p.proconfig @> array['search_path=pg_catalog, public']::text[]
+  ) then raise exception 'ingestion wrapper must remain postgres-owned PL/pgSQL SECURITY INVOKER with a fixed search_path'; end if;
+  if exists (
+    select 1 from pg_proc p, lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+    where p.oid = 'public.ingest_analytics_batch(jsonb,text,timestamptz,timestamptz,text)'::regprocedure
+      and a.privilege_type = 'EXECUTE' and a.grantee not in (p.proowner,'service_role'::regrole::oid)
+  ) then raise exception 'ingestion wrapper EXECUTE is exposed beyond service_role and its owner'; end if;
+end;
+$$;
+
 begin;
 set local role service_role;
 insert into account_stock_test_results
 select 'initial', public.ingest_analytics_batch(payload, 'test.account.stock.request.0001',
   '2026-09-30T03:01:00Z', '2026-09-30T03:01:00Z', repeat('a',64)) from account_stock_test_payload;
+-- A wrapper still bound to the pre-stock implementation cannot write this row.
+do $$ begin
+  if not exists (select 1 from public.ig_account_stock_observations
+    where observation_key = 'test.account.stock.0001' and followers_count = 321
+      and sync_run_id = (select (result->>'run_id')::uuid from account_stock_test_results where label = 'initial')) then
+    raise exception 'public wrapper did not dispatch to the account-stock implementation';
+  end if;
+  begin
+    perform public.ingest_analytics_batch_without_account_stock('{}','denied.request.legacy',now(),now(),repeat('d',64));
+    raise exception 'service_role can execute the old ingestion implementation directly';
+  exception when insufficient_privilege then null; end;
+end; $$;
 commit;
 
 begin;
