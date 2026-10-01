@@ -276,9 +276,6 @@ begin
     perform public.admin_add_report_context_block(f.report_id,'account','Unzoned source',bad,'analytics-formulas-v2');
     raise exception 'RPC accepted unzoned source timestamp';
   exception when others then if sqlerrm <> 'INVALID_REPORT_CONTEXT' then raise; end if; end;
-  select count(*) into n from public.report_context_blocks where report_id = f.report_id;
-  if n <> 2 then raise exception 'invalid report attempts wrote blocks: %',n; end if;
-
   -- Actual PostgreSQL JSONB byte measurement of the UI-shaped 366-day fixture.
   select jsonb_agg(jsonb_build_object('date',to_char(date '2025-01-01' + i,'YYYY-MM-DD'),'value',2147483647) order by i),
     jsonb_agg(jsonb_build_object('observation_key','gas.account_stock.' || lpad(i::text,64,'0'),
@@ -308,6 +305,19 @@ begin
     perform public.admin_add_report_context_block(f.report_id,'account','Oversized legacy',bad,'analytics-formulas-v1');
     raise exception 'RPC widened legacy size limit';
   exception when others then if sqlerrm <> 'INVALID_REPORT_CONTEXT' then raise; end if; end;
+end;
+$$;
+reset role;
+-- authenticated correctly has no direct SELECT policy; inspect the RPC's writes as postgres.
+do $$
+declare fixture_report_id uuid; blocks_written integer;
+begin
+  select report_id into strict fixture_report_id from account_stock_report_fixture;
+  select count(*) into blocks_written
+  from public.report_context_blocks where report_id = fixture_report_id;
+  if blocks_written <> 3 then
+    raise exception 'invalid report attempts wrote blocks or a valid block was lost: %', blocks_written;
+  end if;
 end;
 $$;
 rollback;
