@@ -345,7 +345,8 @@ function analyticsSendBatch_(batch) {
   var body = JSON.stringify(payload);
   var timestamp = String(Math.floor(Date.now() / 1000));
   var signature = analyticsHmacHex_(timestamp + "." + payload.idempotency_key, prop_("ANALYTICS_SYNC_SECRET"));
-  var response = UrlFetchApp.fetch(prop_("ANALYTICS_SYNC_URL"), {
+  var url = prop_("ANALYTICS_SYNC_URL");
+  var options = {
     method: "post",
     contentType: "application/json",
     payload: body,
@@ -355,12 +356,27 @@ function analyticsSendBatch_(batch) {
       "X-Analytics-Signature": signature
     },
     muteHttpExceptions: true
-  });
-  var status = response.getResponseCode();
+  };
+  var status;
+  var text;
+  try {
+    var response = UrlFetchApp.fetch(url, options);
+    status = response.getResponseCode();
+    text = response.getContentText();
+  } catch (error) { throw new Error("network_failure"); }
+  var httpFailure = typeof status === "number" && Math.floor(status) === status && status >= 100 && status <= 599
+    ? "sync_http_" + status : "invalid_response_shape";
   var result;
-  try { result = JSON.parse(response.getContentText()); }
-  catch (error) { throw new Error("ANALYTICS_HTTP_" + status); }
-  if (status !== 202 || !result.ok) throw new Error("ANALYTICS_HTTP_" + status + "_" + String(result.code || "unknown"));
+  try { result = JSON.parse(text); }
+  catch (error) { throw new Error(status === 202 ? "invalid_response_shape" : httpFailure); }
+  if (status !== 202) {
+    var signatureRejected = status === 401 && result &&
+      ["E_SIGNATURE_INVALID", "E_SIGNATURE_MISSING", "E_SIGNATURE_EXPIRED"].indexOf(result.code) > -1;
+    throw new Error(signatureRejected ? "signature_rejected" : httpFailure);
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result) || result.ok !== true) {
+    throw new Error("invalid_response_shape");
+  }
   return result;
 }
 

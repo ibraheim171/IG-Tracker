@@ -72,8 +72,9 @@ function loadAppsScript() {
         return { waitLock() {}, releaseLock() {} };
       },
     },
-    SpreadsheetApp: { getActiveSpreadsheet() { return { getSheetByName() { return null; } }; } },
-    logRun_(_level: string, message: string) { logs.push(message); },
+    SpreadsheetApp: { getActiveSpreadsheet() { return { getSheetByName(name: string) {
+      return name === "log" ? { appendRow(row: unknown[]) { logs.push(String(row[2])); } } : null;
+    } }; } },
   });
   vm.runInContext(codeSource, context, { filename: "Code.gs" });
   vm.runInContext(syncSource, context, { filename: "AnalyticsSync.gs" });
@@ -423,4 +424,121 @@ test("account stock stream advances only accepted chunks and keeps every request
   assert.throws(() => context.analyticsSyncAccountStockRows_(rows), /stock chunk rejected/);
   assert.deepEqual(sizes, [500, 1]);
   assert.equal(properties.get("ANALYTICS_ACCOUNT_STOCK_SENT_THROUGH"), rows[499].observed_at);
+});
+
+function diagnosticTransport() {
+  const fixture = loadAppsScript();
+  fixture.properties.set("ANALYTICS_SYNC_SECRET", "fake-secret-canary");
+  fixture.properties.set("ANALYTICS_SYNC_URL", "https://example.invalid/sync?private=fake-url-canary");
+  fixture.properties.set("IG_TOKEN", "fake-token-canary");
+  return fixture;
+}
+
+test("sync HTTP failures expose only bounded diagnostics even for untrusted response codes", () => {
+  const cases = [
+    [401, '{"ok":false,"code":"E_SIGNATURE_INVALID"}', "signature_rejected"],
+    [401, '{"ok":false,"code":"E_SIGNATURE_MISSING"}', "signature_rejected"],
+    [401, '{"ok":false,"code":"E_SIGNATURE_EXPIRED"}', "signature_rejected"],
+    [401, '{"ok":false,"code":"fake-secret-canary"}', "sync_http_401"],
+    [403, '{"ok":false,"code":"fake-token-canary"}', "sync_http_403"],
+    [429, "fake-response-body-canary", "sync_http_429"],
+    [500, '{"ok":false,"code":"fake-payload-canary"}', "sync_http_500"],
+    [503, "fake-response-body-canary", "sync_http_503"],
+  ] as const;
+  for (const [status, body, expected] of cases) {
+    const { context, logs } = diagnosticTransport();
+    context.UrlFetchApp = { fetch() { return { getResponseCode() { return status; }, getContentText() { return body; } }; } };
+    const batch = context.analyticsEmptyBatch_();
+    batch.account_daily = [accountRow("2026-09-21")];
+    let message = "";
+    const outcome = context.analyticsRunStream_("account", "2026-09-21", () => {
+      try { return context.analyticsSendBatch_(batch); }
+      catch (error) { message = (error as Error).message; throw error; }
+    });
+    assert.equal(outcome.ok, false);
+    assert.equal(message, expected);
+    assert.deepEqual(logs, [`stream=account status=${expected} count=0 date=2026-09-21`]);
+  }
+});
+
+test("malformed accepted responses fail safely rather than become success", () => {
+  for (const body of ["fake-response-body-canary", "null", "[]", "{}", '{"ok":"fake-payload-canary"}']) {
+    const { context, logs } = diagnosticTransport();
+    context.UrlFetchApp = { fetch() { return { getResponseCode() { return 202; }, getContentText() { return body; } }; } };
+    const outcome = context.analyticsRunStream_("posts", "2026-09-25", () => context.analyticsSendBatch_(context.analyticsEmptyBatch_()));
+    assert.equal(outcome.ok, false);
+    assert.deepEqual(logs, ["stream=posts status=invalid_response_shape count=0 date=2026-09-25"]);
+  }
+});
+
+test("network exceptions never expose transport messages in sync or Instagram errors", () => {
+  const { context, logs } = diagnosticTransport();
+  context.UrlFetchApp = { fetch() {
+    throw new Error("fake-secret-canary fake-token-canary fake-payload-canary fake-response-body-canary https://example.invalid/?private=fake-url-canary headers-canary");
+  } };
+  for (const work of [() => context.analyticsSendBatch_(context.analyticsEmptyBatch_()), () => context.igGet_("/me", {})]) {
+    assert.throws(work, { message: "network_failure" });
+    assert.equal(context.analyticsRunStream_("posts", "2026-09-25", work).ok, false);
+  }
+  assert.deepEqual(logs, Array(2).fill("stream=posts status=network_failure count=0 date=2026-09-25"));
+});
+
+test("missing properties and Instagram API failures have safe actionable stream diagnostics", () => {
+  const { context, properties, logs } = diagnosticTransport();
+  properties.delete("ANALYTICS_SYNC_SECRET");
+  assert.equal(context.analyticsRunStream_("posts", "2026-09-25", () => context.analyticsSendBatch_(context.analyticsEmptyBatch_())).ok, false);
+  context.UrlFetchApp = { fetch() { return { getContentText() { return '{"error":{"message":"fake-token-canary fake-response-body-canary"}}'; } }; } };
+  assert.equal(context.analyticsRunStream_("posts", "2026-09-25", () => context.pullPosts_({ getSheetByName() { return {}; } }, "2026-09-25")).ok, false);
+  assert.deepEqual(logs, [
+    "stream=posts status=missing_required_property count=0 date=2026-09-25",
+    "stream=posts status=instagram_api_failure count=0 date=2026-09-25",
+  ]);
+});
+
+test("a failed daily stream retains its safe diagnosis while other streams still succeed", () => {
+  const { context, logs } = diagnosticTransport();
+  context.fmt_ = () => "2026-09-25";
+  context.pullPosts_ = () => {};
+  context.syncAnalyticsStream_ = (stream: string) => {
+    if (stream === "posts") return context.analyticsSendBatch_(context.analyticsEmptyBatch_());
+    return { received: 1 };
+  };
+  context.syncAccountStockAnalytics_ = () => ({ received: 1 });
+  context.syncAccountAnalytics_ = () => ({ received: 1 });
+  context.UrlFetchApp = { fetch() { return { getResponseCode() { return 403; }, getContentText() { return "fake-response-body-canary"; } }; } };
+  assert.throws(() => context.dailyPull(), { message: "ANALYTICS_STREAM_FAILURE: posts" });
+  assert.deepEqual(logs, [
+    "stream=posts status=sync_http_403 count=0 date=2026-09-25",
+    "stream=account_stock status=accepted count=1 date=2026-09-25",
+    "stream=account status=accepted count=1 date=2026-09-23",
+    "stream=collabs status=accepted count=1 date=2026-09-25",
+  ]);
+});
+
+test("unknown exceptions and forged diagnostic strings are never echoed to stream logs", () => {
+  const { context, logs } = loadAppsScript();
+  for (const message of ["fake-token-canary", "sync_http_401\nheaders-canary", "signature_rejected fake-secret-canary"]) {
+    assert.equal(context.analyticsRunStream_("posts", "2026-09-25", () => { throw new Error(message); }).ok, false);
+  }
+  assert.deepEqual(logs, Array(3).fill("stream=posts status=failed count=0 date=2026-09-25"));
+});
+
+test("accepted transport preserves nullable metrics and advances only the existing account watermark", () => {
+  const { context, properties } = diagnosticTransport();
+  properties.set("ANALYTICS_ACCOUNT_SENT_THROUGH", "2026-09-20");
+  context.UrlFetchApp = { fetch(_url: string, options: { payload: string }) {
+    const payload = JSON.parse(options.payload);
+    assert.equal(payload.account_daily.length, 1);
+    assert.equal(payload.account_daily[0].views, null);
+    assert.equal(payload.account_daily[0].reach, 1);
+    return {
+      getResponseCode() { return 202; },
+      getContentText() { return '{"ok":true,"received_count":1,"inserted_count":0,"updated_count":0,"already_present_identical_count":1,"rejected_count":0}'; },
+    };
+  } };
+  const result = context.analyticsSyncAccountRows_([accountRow("2026-09-21")]);
+  assert.equal(result.received, 1);
+  assert.equal(result.inserted, 0);
+  assert.equal(result.identical, 1);
+  assert.equal(properties.get("ANALYTICS_ACCOUNT_SENT_THROUGH"), "2026-09-21");
 });

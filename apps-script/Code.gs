@@ -45,7 +45,7 @@ function doGet() {
 
 function prop_(key) {
   var value = PropertiesService.getScriptProperties().getProperty(key);
-  if (!value) throw new Error("Missing Script Property: " + key);
+  if (!value) throw new Error("missing_required_property");
   return value;
 }
 
@@ -150,7 +150,12 @@ function analyticsStreamCount_(result) {
 
 function analyticsFailureStatus_(error) {
   var message = error && error.message ? String(error.message) : "";
-  if (message.indexOf("ANALYTICS_ACCOUNT_SENT_THROUGH") > -1) return "failed_missing_watermark";
+  // Never copy an external exception message or response code into the log.
+  if (["signature_rejected", "network_failure", "missing_required_property", "invalid_response_shape"].indexOf(message) > -1
+    || /^sync_http_[1-5][0-9]{2}$/.test(message)) return message;
+  if (message === "Missing or invalid Script Property: ANALYTICS_ACCOUNT_SENT_THROUGH") return "failed_missing_watermark";
+  if (["POST_COLLECTION_FAILED", "POST_BACKFILL_FAILED", "ACCOUNT_STOCK_COLLECTION_FAILED",
+    "INSIGHTS_COLLECTION_FAILED", "DEMOGRAPHICS_COLLECTION_FAILED"].indexOf(message) > -1) return "instagram_api_failure";
   return "failed";
 }
 
@@ -535,8 +540,11 @@ function igGet_(path, params) {
   var query = Object.keys(params).map(function (key) {
     return key + "=" + encodeURIComponent(params[key]);
   }).join("&");
-  var response = UrlFetchApp.fetch(API + "/" + VER + path + "?" + query, { muteHttpExceptions: true });
-  try { return JSON.parse(response.getContentText()); }
+  var text;
+  try {
+    text = UrlFetchApp.fetch(API + "/" + VER + path + "?" + query, { muteHttpExceptions: true }).getContentText();
+  } catch (error) { throw new Error("network_failure"); }
+  try { return JSON.parse(text); }
   catch (error) { return { error: { message: "unparsable response" } }; }
 }
 
