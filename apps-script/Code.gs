@@ -45,7 +45,7 @@ function doGet() {
 
 function prop_(key) {
   var value = PropertiesService.getScriptProperties().getProperty(key);
-  if (!value) throw new Error("missing_required_property");
+  if (!value) throw new Error("Missing Script Property: " + key);
   return value;
 }
 
@@ -151,6 +151,9 @@ function analyticsStreamCount_(result) {
 function analyticsFailureStatus_(error) {
   var message = error && error.message ? String(error.message) : "";
   // Never copy an external exception message or response code into the log.
+  if (/^Missing Script Property: (IG_TOKEN|ANALYTICS_SYNC_URL|ANALYTICS_SYNC_SECRET)$/.test(message)) {
+    return "missing_required_property";
+  }
   if (["signature_rejected", "network_failure", "missing_required_property", "invalid_response_shape"].indexOf(message) > -1
     || /^sync_http_[1-5][0-9]{2}$/.test(message)) return message;
   if (message === "Missing or invalid Script Property: ANALYTICS_ACCOUNT_SENT_THROUGH") return "failed_missing_watermark";

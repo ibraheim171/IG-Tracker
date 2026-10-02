@@ -523,6 +523,27 @@ test("unknown exceptions and forged diagnostic strings are never echoed to strea
   assert.deepEqual(logs, Array(3).fill("stream=posts status=failed count=0 date=2026-09-25"));
 });
 
+test("non-analytics properties retain their original missing-property error", () => {
+  const { context } = loadAppsScript();
+  assert.throws(() => context.prop_("DASH_PASSWORD"), {
+    message: "Missing Script Property: DASH_PASSWORD",
+  });
+});
+
+test("analytics property errors produce only a generic safe stream diagnosis", () => {
+  const cases = [
+    ["ANALYTICS_SYNC_SECRET", (context: Record<string, any>) => context.analyticsSendBatch_(context.analyticsEmptyBatch_())],
+    ["ANALYTICS_SYNC_URL", (context: Record<string, any>) => context.analyticsSendBatch_(context.analyticsEmptyBatch_())],
+    ["IG_TOKEN", (context: Record<string, any>) => context.igGet_("/me", {})],
+  ] as const;
+  for (const [missingProperty, work] of cases) {
+    const { context, properties, logs } = diagnosticTransport();
+    properties.delete(missingProperty);
+    assert.equal(context.analyticsRunStream_("posts", "2026-09-25", () => work(context)).ok, false);
+    assert.deepEqual(logs, ["stream=posts status=missing_required_property count=0 date=2026-09-25"]);
+  }
+});
+
 test("accepted transport preserves nullable metrics and advances only the existing account watermark", () => {
   const { context, properties } = diagnosticTransport();
   properties.set("ANALYTICS_ACCOUNT_SENT_THROUGH", "2026-09-20");
